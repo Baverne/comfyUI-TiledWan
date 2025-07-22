@@ -227,7 +227,13 @@ The TiledWan Mask Statistics node can be found in the "TiledWan" category in the
 - Check console warnings for potential mask quality issues
 
 ### TiledWan Video Sampler Simple
-A comprehensive wrapper for WanVideoSampler that exposes all possible input arguments for maximum flexibility and control.
+A complete and accurate wrapper for WanVideoSampler that provides 1:1 compatibility with the original node.
+
+**Key Features:**
+- **Exact Parameter Matching**: All parameters match the original WanVideoSampler exactly
+- **Proper Defaults**: rope_function defaults to "comfy" (as in original)
+- **Clean Interface**: TeaCache controlled exclusively through cache_args (no manual TeaCache inputs)
+- **Deterministic Results**: Same seed produces same results as original node
 
 **Inputs:**
 **Required:**
@@ -242,14 +248,14 @@ A comprehensive wrapper for WanVideoSampler that exposes all possible input argu
 - `denoise_strength`: FLOAT - Denoising strength (default: 1.0, range: 0-1)
 - `force_offload`: BOOLEAN - Force model offloading (default: True)
 - `batched_cfg`: BOOLEAN - Use batched CFG (default: False)
-- `rope_function`: COMBO - RoPE function type (default: "default")
+- `rope_function`: COMBO - RoPE function type ("default", "comfy") - **Default: "comfy"**
 
 **Optional Advanced Arguments:**
 - `text_embeds`: WANVIDEOTEXTEMBEDS - Text embeddings for conditioning
 - `samples`: LATENT - Input latent samples for img2img
 - `feta_args`: FETAARGS - FETA optimization arguments
 - `context_options`: CONTEXTOPTIONS - Context handling options
-- `cache_args`: CACHEARGS - Pre-built cache arguments
+- `cache_args`: CACHEARGS - **Complete TeaCache control** (replaces all manual TeaCache inputs)
 - `slg_args`: SLGARGS - SLG (Sparse Local Guidance) arguments
 - `loop_args`: LOOPARGS - Loop generation arguments
 - `experimental_args`: EXPERIMENTALARGS - Experimental features
@@ -259,59 +265,65 @@ A comprehensive wrapper for WanVideoSampler that exposes all possible input argu
 - `uni3c_embeds`: UNI3C_EMBEDS - Uni3C embeddings
 - `multitalk_embeds`: MULTITALK_EMBEDS - MultiTalk embeddings
 - `freeinit_args`: FREEINIT_ARGS - FreeInit arguments
-- `teacache_args`: TEACACHE_ARGS - Pre-built TeaCache arguments
-
-**TeaCache Manual Configuration:**
-- `enable_teacache`: BOOLEAN - Enable TeaCache optimization (default: False)
-- `teacache_rel_l1_thresh`: FLOAT - L1 threshold for cache (default: 0.3)
-- `teacache_start_step`: INT - Cache start step (default: 1)
-- `teacache_end_step`: INT - Cache end step (default: -1)
-- `teacache_use_coefficients`: BOOLEAN - Use cache coefficients (default: True)
-- `teacache_cache_device`: COMBO - Cache device ("main_device", "offload_device")
-- `teacache_mode`: COMBO - Cache mode ("e", "e0")
+- `teacache_args`: TEACACHE_ARGS - Alternative TeaCache arguments input
 
 **Outputs:**
 - `latents`: LATENT - Generated latent samples
 
+**Important Changes from Previous Version:**
+- ✅ **rope_function** now defaults to "comfy" (matches original behavior)
+- ✅ **Removed manual TeaCache inputs** - use cache_args or teacache_args only
+- ✅ **Cleaner interface** - no more confusing manual cache configuration
+- ✅ **Deterministic results** - same parameters = same output as original
+
 **Features:**
-- **Complete Parameter Exposure**: All WanVideoSampler arguments are available
-- **Flexible Caching**: Use pre-built cache_args or manual TeaCache configuration
-- **Advanced Features**: Support for all cutting-edge WanVideo features
-- **Error Handling**: Comprehensive error reporting and fallback outputs
-- **Progress Tracking**: Detailed console output with feature usage reporting
-- **Import Compatibility**: Robust handling of WanVideo package imports
+- **1:1 Compatibility**: Exact match with original WanVideoSampler behavior
+- **Proper Parameter Defaults**: All defaults match the original node exactly
+- **Comprehensive Coverage**: All WanVideoSampler arguments are exposed
+- **Clean Architecture**: TeaCache controlled through proper argument objects only
+- **Error Handling**: Robust error reporting with detailed traceback
+- **Progress Tracking**: Detailed console output showing feature usage
 
 **Usage:**
 The TiledWan Video Sampler Simple node can be found in the "TiledWan" category in the ComfyUI node browser.
 
 1. **Connect Required Inputs**: Connect your WanVideo model and image embeddings
 2. **Configure Basic Parameters**: Set steps, CFG, shift, seed, and scheduler
-3. **Enable Advanced Features**: 
-   - Set `enable_teacache` to True and configure TeaCache parameters for speed optimization
-   - Connect SLG arguments for sparse guidance
-   - Add experimental arguments for cutting-edge features
-4. **Optional Enhancements**: Connect text embeddings, input samples, or specialized embeddings
-5. **Run the Workflow**: The node executes WanVideoSampler with all configured parameters
+3. **Use Proper rope_function**: Leave as "comfy" for standard behavior (default)
+4. **Advanced Features**: 
+   - Connect cache_args for TeaCache optimization (built from TeaCache nodes)
+   - Connect slg_args for sparse guidance (built from SLG nodes)
+   - Add experimental_args for cutting-edge features
+5. **Run the Workflow**: Node executes with exact original behavior
 
 **Console Output includes:**
 - **Parameter Summary**: List of all received parameters
-- **Feature Detection**: Automatic detection of enabled advanced features (cache, SLG, experimental)
-- **TeaCache Building**: Automatic TeaCache argument construction from manual inputs
+- **Feature Detection**: Shows which advanced features are enabled
 - **Execution Progress**: Sampling progress and completion confirmation
+- **Configuration Display**: Shows rope_function and other key settings
 - **Output Information**: Shape and details of generated latents
 - **Error Handling**: Detailed error messages with full traceback
 
+**TeaCache Usage:**
+- **Correct Method**: Connect a TeaCache node's output to cache_args input
+- **Result**: Full TeaCache functionality with proper device management
+- **No Manual Configuration**: All TeaCache settings handled by the TeaCache node
+
+**Reproducibility:**
+- **Same Seeds**: Identical results to original WanVideoSampler with same parameters
+- **Deterministic**: No randomness introduced by the wrapper
+- **Exact Behavior**: All parameter handling matches original implementation
+
 **Use Cases:**
-- **Advanced Video Generation**: Access to all WanVideo capabilities in a single node
-- **Feature Testing**: Experiment with cutting-edge WanVideo features
-- **Performance Optimization**: Fine-tune caching and optimization settings
-- **Research and Development**: Test new WanVideo innovations
-- **Production Workflows**: Maximum control over video generation process
+- **Drop-in Replacement**: Perfect substitute for original WanVideoSampler
+- **Advanced Workflows**: Access all WanVideo features in single node
+- **Debugging**: Compare outputs with original node using same parameters
+- **Production**: Reliable, deterministic video generation
+- **Research**: Access cutting-edge features while maintaining compatibility
 
 **Tips:**
-- Start with basic required parameters and add advanced features incrementally
-- Enable TeaCache with `enable_teacache=True` for faster inference
-- Use pre-built argument objects when available for complex configurations
-- Monitor console output to understand which features are being used
-- The node handles missing optional arguments gracefully
-- Consider VRAM usage when enabling multiple advanced features simultaneously
+- Keep rope_function as "comfy" unless you specifically need "default"
+- Use TeaCache nodes to create cache_args rather than trying to build manually
+- Same seed + same parameters = identical output to original node
+- Connect argument objects (cache_args, slg_args, etc.) rather than trying to configure manually
+- Monitor console output to verify feature usage and configuration

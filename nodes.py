@@ -438,8 +438,10 @@ class MaskStatistics:
 
 class TiledWanVideoSamplerSimple:
     """
-    A simple test node that only wraps the WanVideoSampler for easier debugging.
-    This node exposes only the essential WanVideoSampler parameters without chaining other nodes.
+    Complete wrapper for WanVideoSampler that exposes all possible input arguments.
+    This node provides maximum compatibility with the original WanVideoSampler by exposing
+    all parameters exactly as they should be, with proper defaults (rope_function="comfy").
+    TeaCache is controlled exclusively through cache_args input.
     """
     
     def __init__(self):
@@ -465,7 +467,7 @@ class TiledWanVideoSamplerSimple:
                 "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "force_offload": ("BOOLEAN", {"default": True}),
                 "batched_cfg": ("BOOLEAN", {"default": False}),
-                "rope_function": (["default", "alternate"], {"default": "default"}),
+                "rope_function": (["default", "comfy"], {"default": "comfy"}),
             },
             "optional": {
                 # Optional core inputs
@@ -486,15 +488,6 @@ class TiledWanVideoSamplerSimple:
                 "multitalk_embeds": ("MULTITALK_EMBEDS",),
                 "freeinit_args": ("FREEINIT_ARGS",),
                 "teacache_args": ("TEACACHE_ARGS",),
-                
-                # TeaCache manual inputs (alternative to teacache_args)
-                "teacache_rel_l1_thresh": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "teacache_start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1}),
-                "teacache_end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1}),
-                "teacache_use_coefficients": ("BOOLEAN", {"default": True}),
-                "teacache_cache_device": (["main_device", "offload_device"], {"default": "offload_device"}),
-                "teacache_mode": (["e", "e0"], {"default": "e"}),
-                "enable_teacache": ("BOOLEAN", {"default": False}),
             },
         }
 
@@ -538,32 +531,6 @@ class TiledWanVideoSamplerSimple:
             print("🎯 Running WanVideoSampler with all parameters...")
             print(f"📊 Parameters received: {list(kwargs.keys())}")
             
-            # Prepare teacache_args if manual teacache inputs are provided
-            cache_args = kwargs.get("cache_args")
-            teacache_args = kwargs.get("teacache_args")
-            
-            # If enable_teacache is True and no pre-built cache_args, build teacache manually
-            if kwargs.get("enable_teacache", False) and not cache_args and not teacache_args:
-                print("📦 Building TeaCache arguments from manual inputs...")
-                cache_device = kwargs.get("teacache_cache_device", "offload_device")
-                if cache_device == "main_device":
-                    import comfy.model_management as mm
-                    cache_device = mm.get_torch_device()
-                else:
-                    import comfy.model_management as mm
-                    cache_device = mm.unet_offload_device()
-                
-                cache_args = {
-                    "cache_type": "TeaCache",
-                    "rel_l1_thresh": kwargs.get("teacache_rel_l1_thresh", 0.3),
-                    "start_step": kwargs.get("teacache_start_step", 1),
-                    "end_step": kwargs.get("teacache_end_step", -1),
-                    "cache_device": cache_device,
-                    "use_coefficients": kwargs.get("teacache_use_coefficients", True),
-                    "mode": kwargs.get("teacache_mode", "e"),
-                }
-                print(f"✅ TeaCache args built: {cache_args}")
-            
             # Run the sampler with all arguments
             sampler_node = WanVideoSampler()
             latent_samples = sampler_node.process(
@@ -581,13 +548,13 @@ class TiledWanVideoSamplerSimple:
                 force_offload=kwargs.get("force_offload", True),
                 
                 # All the advanced arguments
-                cache_args=cache_args or teacache_args,
+                cache_args=kwargs.get("cache_args"),
                 feta_args=kwargs.get("feta_args"),
                 context_options=kwargs.get("context_options"),
                 flowedit_args=None,  # Not in the list but exists in the original call
                 batched_cfg=kwargs.get("batched_cfg", False),
                 slg_args=kwargs.get("slg_args"),
-                rope_function=kwargs.get("rope_function", "default"),
+                rope_function=kwargs.get("rope_function", "comfy"),
                 loop_args=kwargs.get("loop_args"),
                 experimental_args=kwargs.get("experimental_args"),
                 sigmas=kwargs.get("sigmas"),
@@ -600,9 +567,10 @@ class TiledWanVideoSamplerSimple:
             
             print("✅ Complete WanVideo sampler completed successfully!")
             print(f"📤 Output shape: {latent_samples.get('samples', 'Unknown').shape if hasattr(latent_samples.get('samples', None), 'shape') else 'No shape info'}")
-            print(f"🔧 Cache used: {'Yes' if cache_args or teacache_args else 'No'}")
+            print(f"🔧 Cache used: {'Yes' if kwargs.get('cache_args') else 'No'}")
             print(f"🔧 SLG used: {'Yes' if kwargs.get('slg_args') else 'No'}")
             print(f"🔧 Experimental used: {'Yes' if kwargs.get('experimental_args') else 'No'}")
+            print(f"🔧 Rope function: {kwargs.get('rope_function', 'comfy')}")
             print("="*80 + "\n")
             
             return (latent_samples,)
