@@ -226,34 +226,92 @@ The TiledWan Mask Statistics node can be found in the "TiledWan" category in the
 - The pass-through design allows insertion anywhere in mask processing workflows
 - Check console warnings for potential mask quality issues
 
-### TiledWan Video Sampler Test Concat
-The TiledWan Video Sampler Test Concat node can be found in the "TiledWan" category in the ComfyUI node browser.
+### TiledWan Video Sampler Simple
+A comprehensive wrapper for WanVideoSampler that exposes all possible input arguments for maximum flexibility and control.
 
-1. **Connect Required Inputs**: Connect your WanVideo model, VAE, and image embeddings
+**Inputs:**
+**Required:**
+- `model`: WANVIDEOMODEL - The WanVideo model for generation
+- `image_embeds`: WANVIDIMAGE_EMBEDS - Image embeddings for conditioning
+- `steps`: INT - Number of sampling steps (default: 30)
+- `cfg`: FLOAT - Classifier-free guidance scale (default: 6.0, range: 0-30)
+- `shift`: FLOAT - Shift parameter for sampling (default: 5.0, range: 0-1000)
+- `seed`: INT - Random seed for reproducibility (default: 0)
+- `scheduler`: COMBO - Sampling scheduler (default: "unipc")
+- `riflex_freq_index`: INT - Riflex frequency index (default: 0)
+- `denoise_strength`: FLOAT - Denoising strength (default: 1.0, range: 0-1)
+- `force_offload`: BOOLEAN - Force model offloading (default: True)
+- `batched_cfg`: BOOLEAN - Use batched CFG (default: False)
+- `rope_function`: COMBO - RoPE function type (default: "default")
+
+**Optional Advanced Arguments:**
+- `text_embeds`: WANVIDEOTEXTEMBEDS - Text embeddings for conditioning
+- `samples`: LATENT - Input latent samples for img2img
+- `feta_args`: FETAARGS - FETA optimization arguments
+- `context_options`: CONTEXTOPTIONS - Context handling options
+- `cache_args`: CACHEARGS - Pre-built cache arguments
+- `slg_args`: SLGARGS - SLG (Sparse Local Guidance) arguments
+- `loop_args`: LOOPARGS - Loop generation arguments
+- `experimental_args`: EXPERIMENTALARGS - Experimental features
+- `sigmas`: SIGMAS - Custom noise schedule
+- `unianimate_poses`: UNIANIMATE_POSES - UniAnimate pose data
+- `fantasytalking_embeds`: FANTASYTALKING_EMBEDS - Fantasy talking embeddings
+- `uni3c_embeds`: UNI3C_EMBEDS - Uni3C embeddings
+- `multitalk_embeds`: MULTITALK_EMBEDS - MultiTalk embeddings
+- `freeinit_args`: FREEINIT_ARGS - FreeInit arguments
+- `teacache_args`: TEACACHE_ARGS - Pre-built TeaCache arguments
+
+**TeaCache Manual Configuration:**
+- `enable_teacache`: BOOLEAN - Enable TeaCache optimization (default: False)
+- `teacache_rel_l1_thresh`: FLOAT - L1 threshold for cache (default: 0.3)
+- `teacache_start_step`: INT - Cache start step (default: 1)
+- `teacache_end_step`: INT - Cache end step (default: -1)
+- `teacache_use_coefficients`: BOOLEAN - Use cache coefficients (default: True)
+- `teacache_cache_device`: COMBO - Cache device ("main_device", "offload_device")
+- `teacache_mode`: COMBO - Cache mode ("e", "e0")
+
+**Outputs:**
+- `latents`: LATENT - Generated latent samples
+
+**Features:**
+- **Complete Parameter Exposure**: All WanVideoSampler arguments are available
+- **Flexible Caching**: Use pre-built cache_args or manual TeaCache configuration
+- **Advanced Features**: Support for all cutting-edge WanVideo features
+- **Error Handling**: Comprehensive error reporting and fallback outputs
+- **Progress Tracking**: Detailed console output with feature usage reporting
+- **Import Compatibility**: Robust handling of WanVideo package imports
+
+**Usage:**
+The TiledWan Video Sampler Simple node can be found in the "TiledWan" category in the ComfyUI node browser.
+
+1. **Connect Required Inputs**: Connect your WanVideo model and image embeddings
 2. **Configure Basic Parameters**: Set steps, CFG, shift, seed, and scheduler
-3. **Adjust Advanced Settings**: Fine-tune TeaCache, VACE, SLG, and experimental parameters as needed
-4. **Optional Inputs**: Connect text embeddings, input frames, or masks if using advanced features
-5. **Run the Workflow**: The node will execute the complete pipeline and output video frames
+3. **Enable Advanced Features**: 
+   - Set `enable_teacache` to True and configure TeaCache parameters for speed optimization
+   - Connect SLG arguments for sparse guidance
+   - Add experimental arguments for cutting-edge features
+4. **Optional Enhancements**: Connect text embeddings, input samples, or specialized embeddings
+5. **Run the Workflow**: The node executes WanVideoSampler with all configured parameters
 
 **Console Output includes:**
-- **Pipeline Progress**: Step-by-step execution progress with emojis for visual tracking
-- **Parameter Setup**: Confirmation of TeaCache, SLG, and experimental argument preparation
-- **VACE Processing**: VACE encoding progress and configuration
-- **Sampling Progress**: WanVideo sampling execution with all optimizations
-- **Decoding Progress**: VAE decoding with optional tiling information
-- **Error Handling**: Detailed error messages if any step fails
+- **Parameter Summary**: List of all received parameters
+- **Feature Detection**: Automatic detection of enabled advanced features (cache, SLG, experimental)
+- **TeaCache Building**: Automatic TeaCache argument construction from manual inputs
+- **Execution Progress**: Sampling progress and completion confirmation
+- **Output Information**: Shape and details of generated latents
+- **Error Handling**: Detailed error messages with full traceback
 
 **Use Cases:**
-- **Rapid Prototyping**: Test complete WanVideo pipelines without connecting multiple nodes
-- **Parameter Testing**: Experiment with different WanVideo settings in a single node
-- **Production Workflows**: Use as a complete video generation solution
-- **Educational**: Learn how WanVideo components work together
-- **Development**: Test new WanVideo features and optimizations
+- **Advanced Video Generation**: Access to all WanVideo capabilities in a single node
+- **Feature Testing**: Experiment with cutting-edge WanVideo features
+- **Performance Optimization**: Fine-tune caching and optimization settings
+- **Research and Development**: Test new WanVideo innovations
+- **Production Workflows**: Maximum control over video generation process
 
 **Tips:**
-- Start with default parameters and adjust gradually based on results
-- Enable TeaCache for faster inference but watch for quality trade-offs
-- Use VAE tiling if running out of VRAM during decoding
-- Check console output for detailed progress and error information
-- The node includes error handling but check inputs carefully for best results
-- Consider memory usage when setting high frame counts or resolutions
+- Start with basic required parameters and add advanced features incrementally
+- Enable TeaCache with `enable_teacache=True` for faster inference
+- Use pre-built argument objects when available for complex configurations
+- Monitor console output to understand which features are being used
+- The node handles missing optional arguments gracefully
+- Consider VRAM usage when enabling multiple advanced features simultaneously
