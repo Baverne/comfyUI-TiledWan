@@ -52,6 +52,30 @@ Blend two images using various blend modes with advanced clamping options for ne
 - Device-aware processing: handles GPU/CPU tensor placement automatically
 - Alpha channel handling: properly manages transparency in input images
 
+### TiledWan Image Statistics
+Analyze images and display comprehensive statistics including min, max, mean, variance, median and distribution analysis.
+
+**Inputs:**
+- `image`: IMAGE - Input image to analyze
+- `show_per_channel`: BOOLEAN - Whether to show per-channel statistics for RGB/RGBA images (default: True)
+
+**Outputs:**
+- `image`: IMAGE - The original image (pass-through)
+- `min_value`: FLOAT - Minimum pixel value in the image
+- `max_value`: FLOAT - Maximum pixel value in the image
+- `mean_value`: FLOAT - Average pixel value
+- `variance`: FLOAT - Variance of pixel values
+- `median_value`: FLOAT - Median pixel value
+
+**Features:**
+- Comprehensive statistics: min, max, mean, median, variance, standard deviation
+- Per-channel analysis for multi-channel images
+- Value distribution histogram (10 bins)
+- Percentile analysis (1st, 5th, 10th, 25th, 50th, 75th, 90th, 95th, 99th)
+- Memory usage and image format information
+- Automatic issue detection (negative values, out-of-range values, constant images)
+- Console output with detailed formatting for easy reading
+
 ## Usage
 
 ### TiledWan Image To Mask
@@ -88,3 +112,31 @@ The TiledWan Image Blend node can be found in the "TiledWan" category in the Com
 - Use `clamp_negative: False` when working with difference mode to preserve negative values for further processing
 - Enable `clamp_negative: True` for final output to ensure valid image data
 - Experiment with different blend modes for creative effects
+
+### TiledWan Image Statistics
+The TiledWan Image Statistics node can be found in the "TiledWan" category in the ComfyUI node browser.
+
+1. Connect any image to the input
+2. Enable or disable per-channel analysis based on your needs
+3. Run the workflow - statistics will be displayed in the ComfyUI console
+4. The node also outputs individual statistic values that can be used by other nodes
+
+**Console Output includes:**
+- **Basic Info**: Image dimensions, total pixels, memory usage, data type
+- **Global Statistics**: Min, max, mean, median, variance, standard deviation
+- **Per-Channel Analysis**: Individual statistics for R, G, B, A channels
+- **Distribution Analysis**: 10-bin histogram showing value distribution
+- **Percentiles**: Key percentile values for detailed distribution analysis
+- **Issue Detection**: Automatic warnings for potential problems
+
+**Use Cases:**
+- **Quality Control**: Detect images with unusual value ranges or distributions
+- **Debugging**: Understand what's happening to your images in complex workflows
+- **Optimization**: Identify images that might need preprocessing or normalization
+- **Analysis**: Extract numerical statistics for further processing or decision making
+
+**Tips:**
+- Enable per-channel analysis for color images to understand channel balance
+- Use the output values in mathematical nodes for dynamic workflow control
+- Check the console output for warnings about potential image issues
+- The pass-through design allows you to insert this node anywhere without breaking your workflow

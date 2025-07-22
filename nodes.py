@@ -186,15 +186,151 @@ class ImageBlend:
         return torch.where(x <= 0.25, ((16 * x - 12) * x + 4) * x, torch.sqrt(x))
 
 
+class ImageStatistics:
+    """
+    Calculate and display comprehensive statistics for an image.
+    Shows min, max, mean, variance, median, and other useful statistics.
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "show_per_channel": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "enabled",
+                    "label_off": "disabled"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT")
+    RETURN_NAMES = ("image", "min_value", "max_value", "mean_value", "variance", "median_value")
+    FUNCTION = "calculate_statistics"
+    OUTPUT_NODE = True  # This allows the node to display output in the console
+    CATEGORY = "TiledWan"
+
+    def calculate_statistics(self, image: torch.Tensor, show_per_channel: bool):
+        """
+        Calculate comprehensive statistics for the input image.
+        
+        Args:
+            image: Input image tensor [batch, height, width, channels]
+            show_per_channel: Whether to show per-channel statistics
+            
+        Returns:
+            tuple: (original_image, min, max, mean, variance, median)
+        """
+        print("\n=== TiledWan Image Statistics ===")
+        
+        # Basic image info
+        batch_size, height, width, channels = image.shape
+        total_pixels = height * width * channels * batch_size
+        
+        print(f"Image shape: {image.shape} (B×H×W×C)")
+        print(f"Total pixels: {total_pixels:,}")
+        print(f"Memory usage: {image.numel() * image.element_size() / (1024*1024):.2f} MB")
+        print(f"Data type: {image.dtype}")
+        print(f"Device: {image.device}")
+        
+        # Calculate global statistics
+        min_val = image.min().item()
+        max_val = image.max().item()
+        mean_val = image.mean().item()
+        variance_val = image.var().item()
+        std_val = image.std().item()
+        
+        # Calculate median (flatten the tensor first)
+        flattened = image.flatten()
+        median_val = torch.median(flattened).values.item()
+        
+        # Additional useful statistics
+        non_zero_count = torch.count_nonzero(image).item()
+        zero_count = total_pixels - non_zero_count
+        
+        print("\n--- Global Statistics ---")
+        print(f"Min value: {min_val:.6f}")
+        print(f"Max value: {max_val:.6f}")
+        print(f"Mean value: {mean_val:.6f}")
+        print(f"Median value: {median_val:.6f}")
+        print(f"Variance: {variance_val:.6f}")
+        print(f"Standard deviation: {std_val:.6f}")
+        print(f"Value range: {max_val - min_val:.6f}")
+        print(f"Non-zero pixels: {non_zero_count:,} ({non_zero_count/total_pixels:.2%})")
+        print(f"Zero pixels: {zero_count:,} ({zero_count/total_pixels:.2%})")
+        
+        # Per-channel statistics if requested
+        if show_per_channel and channels > 1:
+            print("\n--- Per-Channel Statistics ---")
+            channel_names = ["Red", "Green", "Blue", "Alpha"][:channels]
+            
+            for c in range(channels):
+                channel_data = image[:, :, :, c]
+                ch_min = channel_data.min().item()
+                ch_max = channel_data.max().item()
+                ch_mean = channel_data.mean().item()
+                ch_median = torch.median(channel_data.flatten()).values.item()
+                ch_std = channel_data.std().item()
+                
+                print(f"{channel_names[c]} Channel:")
+                print(f"  Min: {ch_min:.6f}, Max: {ch_max:.6f}")
+                print(f"  Mean: {ch_mean:.6f}, Median: {ch_median:.6f}")
+                print(f"  Std: {ch_std:.6f}, Range: {ch_max - ch_min:.6f}")
+        
+        # Value distribution analysis
+        print("\n--- Value Distribution ---")
+        # Create bins for histogram analysis
+        bins = torch.linspace(min_val, max_val, 11)  # 10 bins
+        hist = torch.histc(flattened, bins=10, min=min_val, max=max_val)
+        
+        print("Value distribution (10 bins):")
+        for i in range(len(hist)):
+            bin_start = bins[i].item()
+            bin_end = bins[i+1].item() if i < len(bins)-1 else max_val
+            count = hist[i].item()
+            percentage = count / total_pixels * 100
+            print(f"  [{bin_start:.3f} - {bin_end:.3f}]: {count:,.0f} pixels ({percentage:.1f}%)")
+        
+        # Percentiles
+        print("\n--- Percentiles ---")
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        sorted_values = torch.sort(flattened).values
+        for p in percentiles:
+            idx = int((p / 100.0) * (len(sorted_values) - 1))
+            value = sorted_values[idx].item()
+            print(f"  {p:2d}th percentile: {value:.6f}")
+        
+        # Potential issues detection
+        print("\n--- Analysis ---")
+        if min_val < 0:
+            print("⚠️  Warning: Image contains negative values!")
+        if max_val > 1:
+            print("⚠️  Warning: Image contains values > 1.0!")
+        if min_val == max_val:
+            print("⚠️  Warning: Image has constant values (no variation)!")
+        if std_val < 0.01:
+            print("⚠️  Notice: Very low standard deviation - image might be nearly uniform")
+        if non_zero_count / total_pixels < 0.1:
+            print("⚠️  Notice: Most pixels are zero - sparse image")
+        
+        print("================================\n")
+        
+        # Return the image and key statistics
+        return (image, min_val, max_val, mean_val, variance_val, median_val)
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
     "TiledWanImageToMask": ImageToMask,
-    "TiledWanImageBlend": ImageBlend
+    "TiledWanImageBlend": ImageBlend,
+    "TiledWanImageStatistics": ImageStatistics
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageToMask": "TiledWan Image To Mask",
-    "TiledWanImageBlend": "TiledWan Image Blend"
+    "TiledWanImageBlend": "TiledWan Image Blend",
+    "TiledWanImageStatistics": "TiledWan Image Statistics"
 }
