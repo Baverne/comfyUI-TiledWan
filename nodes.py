@@ -535,11 +535,23 @@ class TiledWanVideoSamplerTestConcat:
             # Import the WanVideo nodes we need
             import sys
             import os
+            import importlib.util
+            
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             sys.path.append(custom_nodes_path)
             
-            from nodes import (WanVideoSampler, WanVideoTeaCache, WanVideoVACEEncode, 
-                              WanVideoSLG, WanVideoExperimentalArgs, WanVideoDecode)
+            # Import the specific file directly to avoid name conflict
+            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
+            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
+            wanvideo_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(wanvideo_module)
+            
+            WanVideoSampler = wanvideo_module.WanVideoSampler
+            WanVideoTeaCache = wanvideo_module.WanVideoTeaCache
+            WanVideoVACEEncode = wanvideo_module.WanVideoVACEEncode
+            WanVideoSLG = wanvideo_module.WanVideoSLG
+            WanVideoExperimentalArgs = wanvideo_module.WanVideoExperimentalArgs
+            WanVideoDecode = wanvideo_module.WanVideoDecode
             
             # Step 1: Create TeaCache arguments
             print("📦 Step 1: Preparing TeaCache arguments...")
@@ -708,11 +720,19 @@ class TiledWanVideoSamplerSimple:
             # Import the WanVideoSampler
             import sys
             import os
+            import importlib.util
+            
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             if custom_nodes_path not in sys.path:
                 sys.path.append(custom_nodes_path)
             
-            from nodes import WanVideoSampler
+            # Import the specific file directly to avoid name conflict
+            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
+            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
+            wanvideo_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(wanvideo_module)
+            
+            WanVideoSampler = wanvideo_module.WanVideoSampler
             
             print("🎯 Running WanVideoSampler with basic parameters...")
             print(f"📊 Parameters received: {list(kwargs.keys())}")
@@ -829,7 +849,15 @@ class TiledWanVideoSLGSimple:
                 print(f"❌ Path does NOT exist: {custom_nodes_path}")
             
             print("🔄 Attempting import...")
-            from nodes import WanVideoSLG
+            
+            # Solution: Import the specific file directly to avoid name conflict
+            import importlib.util
+            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
+            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
+            wanvideo_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(wanvideo_module)
+            
+            WanVideoSLG = wanvideo_module.WanVideoSLG
             print("✅ Import successful!")
             
             print("🎯 Running WanVideoSLG with basic parameters...")
@@ -858,7 +886,7 @@ class TiledWanVideoSLGSimple:
             print("="*80 + "\n")
             
             # Return dummy output in case of error
-            dummy_slg = {"slg_blocks": "10", "start_percent": 0.1, "end_percent": 1.0}
+            dummy_slg = {"blocks": "10", "start_percent": 0.1, "end_percent": 1.0}
             
             return (dummy_slg,)
 
