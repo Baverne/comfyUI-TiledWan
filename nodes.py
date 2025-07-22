@@ -74,118 +74,6 @@ class ImageToMask:
         return (mask,)
 
 
-class ImageBlend:
-    """
-    Blend two images using various blend modes with optional clamping for negative values.
-    """
-    
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image1": ("IMAGE",),
-                "image2": ("IMAGE",),
-                "blend_factor": ("FLOAT", {
-                    "default": 0.5,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.01
-                }),
-                "blend_mode": (["normal", "multiply", "screen", "overlay", "soft_light", "difference"],),
-                "clamp_negative": ("BOOLEAN", {
-                    "default": False,
-                    "label_on": "enabled",
-                    "label_off": "disabled"
-                }),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "blend_images"
-    CATEGORY = "TiledWan"
-
-    def blend_images(self, image1: torch.Tensor, image2: torch.Tensor, blend_factor: float, blend_mode: str, clamp_negative: bool):
-        """
-        Blend two images using the specified blend mode and factor.
-        
-        Args:
-            image1: Base image tensor
-            image2: Overlay image tensor  
-            blend_factor: Blending strength (0.0 to 1.0)
-            blend_mode: Blending mode to use
-            clamp_negative: Whether to clamp values below 0 to 0
-            
-        Returns:
-            tuple: Blended image tensor
-        """
-        # Fix alpha channels and ensure same device
-        image1, image2 = node_helpers.image_alpha_fix(image1, image2)
-        image2 = image2.to(image1.device)
-        
-        # Resize image2 to match image1 if shapes differ
-        if image1.shape != image2.shape:
-            image2 = image2.permute(0, 3, 1, 2)
-            image2 = comfy.utils.common_upscale(image2, image1.shape[2], image1.shape[1], upscale_method='bicubic', crop='center')
-            image2 = image2.permute(0, 2, 3, 1)
-
-        # Apply blend mode
-        blended_image = self.blend_mode(image1, image2, blend_mode)
-        
-        # Mix with original based on blend factor
-        blended_image = image1 * (1 - blend_factor) + blended_image * blend_factor
-        
-        # Apply clamping
-        if clamp_negative:
-            blended_image = torch.clamp(blended_image, 0.0, max=None)
-
-        return (blended_image,)
-
-    def blend_mode(self, img1, img2, mode):
-        """
-        Apply the specified blend mode to two images.
-        
-        Args:
-            img1: Base image
-            img2: Overlay image
-            mode: Blend mode string
-            
-        Returns:
-            torch.Tensor: Blended image
-        """
-        if mode == "normal":
-            return img2
-        elif mode == "multiply":
-            return img1 * img2
-        elif mode == "screen":
-            return 1 - (1 - img1) * (1 - img2)
-        elif mode == "overlay":
-            return torch.where(img1 <= 0.5, 2 * img1 * img2, 1 - 2 * (1 - img1) * (1 - img2))
-        elif mode == "soft_light":
-            return torch.where(img2 <= 0.5, 
-                             img1 - (1 - 2 * img2) * img1 * (1 - img1), 
-                             img1 + (2 * img2 - 1) * (self.g(img1) - img1))
-        elif mode == "difference":
-            return torch.abs(img1 - img2)
-        else:
-            raise ValueError(f"Unsupported blend mode: {mode}")
-
-    def g(self, x):
-        """
-        Helper function for soft light blend mode.
-        
-        Args:
-            x: Input tensor
-            
-        Returns:
-            torch.Tensor: Processed tensor
-        """
-        return torch.where(x <= 0.25, ((16 * x - 12) * x + 4) * x, torch.sqrt(x))
-
-
 class ImageStatistics:
     """
     Calculate and display comprehensive statistics for an image.
@@ -333,17 +221,231 @@ class ImageStatistics:
         return (image, min_val, max_val, mean_val, variance_val, median_val)
 
 
+class MaskStatistics:
+    """
+    Calculate and display comprehensive statistics for a mask.
+    Shows min, max, mean, variance, median, and mask-specific statistics.
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mask": ("MASK",),
+                "analyze_connected_components": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "enabled",
+                    "label_off": "disabled"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "INT")
+    RETURN_NAMES = ("mask", "min_value", "max_value", "mean_value", "variance", "median_value", "white_pixel_count")
+    FUNCTION = "calculate_mask_statistics"
+    OUTPUT_NODE = True  # This allows the node to display output in the console
+    CATEGORY = "TiledWan"
+
+    def calculate_mask_statistics(self, mask: torch.Tensor, analyze_connected_components: bool):
+        """
+        Calculate comprehensive statistics for the input mask.
+        
+        Args:
+            mask: Input mask tensor [batch, height, width]
+            analyze_connected_components: Whether to analyze connected components
+            
+        Returns:
+            tuple: (original_mask, min, max, mean, variance, median, white_pixel_count)
+        """
+        print("\n=== TiledWan Mask Statistics ===")
+        
+        # Basic mask info
+        if len(mask.shape) == 3:
+            batch_size, height, width = mask.shape
+            channels = 1
+        else:
+            batch_size, height, width, channels = mask.shape
+            
+        total_pixels = height * width * batch_size
+        
+        print(f"Mask shape: {mask.shape} (B×H×W)")
+        print(f"Total pixels: {total_pixels:,}")
+        print(f"Memory usage: {mask.numel() * mask.element_size() / (1024*1024):.2f} MB")
+        print(f"Data type: {mask.dtype}")
+        print(f"Device: {mask.device}")
+        
+        # Calculate global statistics
+        min_val = mask.min().item()
+        max_val = mask.max().item()
+        mean_val = mask.mean().item()
+        variance_val = mask.var().item()
+        std_val = mask.std().item()
+        
+        # Calculate median (flatten the tensor first)
+        flattened = mask.flatten()
+        # Sort and find median manually to avoid compatibility issues
+        sorted_values = torch.sort(flattened).values
+        n = len(sorted_values)
+        if n % 2 == 0:
+            median_val = (sorted_values[n//2 - 1] + sorted_values[n//2]).item() / 2.0
+        else:
+            median_val = sorted_values[n//2].item()
+        
+        # Mask-specific statistics
+        white_pixels = torch.sum(mask > 0.5).item()  # Pixels considered "white" (active)
+        black_pixels = total_pixels - white_pixels
+        coverage = white_pixels / total_pixels
+        
+        # Count unique values (useful for masks)
+        unique_values = torch.unique(mask)
+        unique_count = len(unique_values)
+        
+        print("\n--- Global Statistics ---")
+        print(f"Min value: {min_val:.6f}")
+        print(f"Max value: {max_val:.6f}")
+        print(f"Mean value: {mean_val:.6f}")
+        print(f"Median value: {median_val:.6f}")
+        print(f"Variance: {variance_val:.6f}")
+        print(f"Standard deviation: {std_val:.6f}")
+        print(f"Value range: {max_val - min_val:.6f}")
+        
+        print("\n--- Mask-Specific Statistics ---")
+        print(f"White pixels (>0.5): {white_pixels:,} ({coverage:.2%})")
+        print(f"Black pixels (≤0.5): {black_pixels:,} ({(1-coverage):.2%})")
+        print(f"Unique values: {unique_count}")
+        if unique_count <= 10:
+            print(f"Unique values list: {[f'{val:.3f}' for val in unique_values.tolist()]}")
+        
+        # Mask density analysis
+        print(f"Mask density: {coverage:.4f}")
+        if coverage > 0.8:
+            print("  → High density mask (mostly white)")
+        elif coverage > 0.5:
+            print("  → Medium-high density mask")
+        elif coverage > 0.2:
+            print("  → Medium-low density mask")
+        elif coverage > 0.05:
+            print("  → Low density mask")
+        else:
+            print("  → Very sparse mask")
+        
+        # Value distribution analysis
+        print("\n--- Value Distribution ---")
+        # For masks, show distribution more relevant to binary/grayscale nature
+        if unique_count <= 20:  # If few unique values, show exact counts
+            print("Exact value counts:")
+            for val in unique_values:
+                count = torch.sum(mask == val).item()
+                percentage = count / total_pixels * 100
+                print(f"  Value {val:.3f}: {count:,} pixels ({percentage:.1f}%)")
+        else:
+            # Create bins for histogram analysis
+            bins = torch.linspace(min_val, max_val, 11)  # 10 bins
+            hist = torch.histc(flattened, bins=10, min=min_val, max=max_val)
+            
+            print("Value distribution (10 bins):")
+            for i in range(len(hist)):
+                bin_start = bins[i].item()
+                bin_end = bins[i+1].item() if i < len(bins)-1 else max_val
+                count = hist[i].item()
+                percentage = count / total_pixels * 100
+                print(f"  [{bin_start:.3f} - {bin_end:.3f}]: {count:,.0f} pixels ({percentage:.1f}%)")
+        
+        # Percentiles
+        print("\n--- Percentiles ---")
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        # Use the already sorted values from median calculation
+        for p in percentiles:
+            idx = int((p / 100.0) * (len(sorted_values) - 1))
+            value = sorted_values[idx].item()
+            print(f"  {p:2d}th percentile: {value:.6f}")
+        
+        # Connected components analysis (if requested)
+        if analyze_connected_components and coverage > 0 and coverage < 1:
+            print("\n--- Connected Components Analysis ---")
+            try:
+                # Simple connected components analysis
+                # For each batch item
+                total_components = 0
+                largest_component = 0
+                smallest_component = float('inf')
+                
+                for b in range(batch_size):
+                    mask_slice = mask[b] if len(mask.shape) == 3 else mask[b, :, :, 0]
+                    binary_mask = (mask_slice > 0.5).float()
+                    
+                    if binary_mask.sum() > 0:  # Only analyze if there are white pixels
+                        # Simple component counting (not perfect but gives an idea)
+                        # Count clusters by looking at transitions
+                        transitions = 0
+                        prev_row_white = torch.zeros(width, dtype=torch.bool, device=mask.device)
+                        
+                        for row in range(height):
+                            current_row = binary_mask[row] > 0.5
+                            # Count horizontal transitions in this row
+                            if row == 0:
+                                transitions += torch.sum(current_row[1:] != current_row[:-1]).item()
+                            
+                            # Count vertical transitions
+                            transitions += torch.sum(current_row != prev_row_white).item()
+                            prev_row_white = current_row
+                        
+                        # Rough estimate of components (very approximate)
+                        estimated_components = max(1, transitions // 4)
+                        total_components += estimated_components
+                        
+                        component_size = binary_mask.sum().item()
+                        largest_component = max(largest_component, component_size)
+                        smallest_component = min(smallest_component, component_size)
+                
+                if total_components > 0:
+                    avg_components = total_components / batch_size
+                    print(f"Estimated components per image: {avg_components:.1f}")
+                    print(f"Largest component: {largest_component:,} pixels")
+                    if smallest_component != float('inf'):
+                        print(f"Smallest component: {smallest_component:,} pixels")
+                else:
+                    print("No connected components found")
+                    
+            except Exception as e:
+                print(f"Connected components analysis failed: {str(e)}")
+        
+        # Potential issues detection
+        print("\n--- Analysis ---")
+        if min_val < 0:
+            print("⚠️  Warning: Mask contains negative values!")
+        if max_val > 1:
+            print("⚠️  Warning: Mask contains values > 1.0!")
+        if min_val == max_val:
+            print("⚠️  Warning: Mask has constant values (uniform mask)!")
+        if unique_count == 2 and min_val == 0 and max_val == 1:
+            print("✓  Perfect binary mask (0 and 1 only)")
+        elif unique_count <= 5:
+            print(f"✓  Nearly binary mask ({unique_count} unique values)")
+        if coverage < 0.01:
+            print("⚠️  Notice: Very sparse mask - almost empty")
+        if coverage > 0.99:
+            print("⚠️  Notice: Very dense mask - almost full")
+        if std_val < 0.01:
+            print("⚠️  Notice: Very low standard deviation - mask might be nearly uniform")
+        
+        print("================================\n")
+        
+        # Return the mask and key statistics
+        return (mask, min_val, max_val, mean_val, variance_val, median_val, white_pixels)
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
     "TiledWanImageToMask": ImageToMask,
-    "TiledWanImageBlend": ImageBlend,
-    "TiledWanImageStatistics": ImageStatistics
+    "TiledWanImageStatistics": ImageStatistics,
+    "TiledWanMaskStatistics": MaskStatistics
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageToMask": "TiledWan Image To Mask",
-    "TiledWanImageBlend": "TiledWan Image Blend",
-    "TiledWanImageStatistics": "TiledWan Image Statistics"
+    "TiledWanImageStatistics": "TiledWan Image Statistics",
+    "TiledWanMaskStatistics": "TiledWan Mask Statistics"
 }

@@ -32,26 +32,6 @@ Converts an image to a mask by extracting a specific color channel (red, green, 
 - Optional clamping: ensures all values are between 0 and 1
 - Robust handling of different image formats
 
-### TiledWan Image Blend
-Blend two images using various blend modes with advanced clamping options for negative values.
-
-**Inputs:**
-- `image1`: IMAGE - Base/background image
-- `image2`: IMAGE - Overlay/foreground image (automatically resized to match image1 if needed)
-- `blend_factor`: FLOAT - Blending strength from 0.0 to 1.0 (default: 0.5)
-- `blend_mode`: COMBO - Blending mode: "normal", "multiply", "screen", "overlay", "soft_light", "difference"
-- `clamp_negative`: BOOLEAN - Whether to clamp values below 0 to 0 (default: False)
-
-**Outputs:**
-- `image`: IMAGE - The blended result image
-
-**Features:**
-- Automatic image resizing: image2 is automatically scaled to match image1's dimensions
-- Multiple blend modes with proper mathematical implementations
-- Advanced clamping control: choose whether to allow negative values or clamp them to 0
-- Device-aware processing: handles GPU/CPU tensor placement automatically
-- Alpha channel handling: properly manages transparency in input images
-
 ### TiledWan Image Statistics
 Analyze images and display comprehensive statistics including min, max, mean, variance, median and distribution analysis.
 
@@ -76,6 +56,30 @@ Analyze images and display comprehensive statistics including min, max, mean, va
 - Automatic issue detection (negative values, out-of-range values, constant images)
 - Console output with detailed formatting for easy reading
 
+### TiledWan Mask Statistics
+Analyze masks and display comprehensive statistics including coverage, density, connected components and distribution analysis.
+
+**Inputs:**
+- `mask`: MASK - Input mask to analyze
+- `analyze_connected_components`: BOOLEAN - Whether to perform connected components analysis (default: True)
+
+**Outputs:**
+- `mask`: MASK - The original mask (pass-through)
+- `min_value`: FLOAT - Minimum pixel value in the mask
+- `max_value`: FLOAT - Maximum pixel value in the mask
+- `mean_value`: FLOAT - Average pixel value
+- `variance`: FLOAT - Variance of pixel values
+- `median_value`: FLOAT - Median pixel value
+- `white_pixel_count`: INT - Number of pixels considered "white" (>0.5)
+
+**Features:**
+- Standard statistics: min, max, mean, median, variance, standard deviation
+- Mask-specific analysis: white/black pixel counts, coverage percentage, density classification
+- Value distribution: exact counts for few unique values, histogram for complex masks
+- Connected components analysis: estimated number and size of separate mask regions
+- Mask quality assessment: binary mask detection, uniformity analysis
+- Automatic issue detection: negative values, out-of-range values, sparse/dense masks
+
 ## Usage
 
 ### TiledWan Image To Mask
@@ -90,28 +94,6 @@ The TiledWan Image To Mask node can be found in the "TiledWan" category in the C
 - Use normalization when you want to maximize contrast in the resulting mask
 - Use clamping to ensure compatibility with other ComfyUI nodes that expect 0-1 values
 - The alpha channel option works even with RGB images (will create a fully opaque mask)
-
-### TiledWan Image Blend
-The TiledWan Image Blend node can be found in the "TiledWan" category in the ComfyUI node browser.
-
-1. Connect a base image to `image1` input
-2. Connect an overlay image to `image2` input (will be automatically resized if needed)
-3. Set the `blend_factor` to control the strength of the blend (0.0 = only image1, 1.0 = full blend effect)
-4. Choose a `blend_mode` for different visual effects
-5. Enable `clamp_negative` if you want to prevent negative values (useful for certain blend modes)
-
-**Blend Modes:**
-- **Normal**: Simple overlay replacement
-- **Multiply**: Darkens by multiplying colors
-- **Screen**: Lightens by inverting, multiplying, then inverting again
-- **Overlay**: Combines multiply and screen based on base color
-- **Soft Light**: Subtle lighting effect
-- **Difference**: Shows absolute difference between images
-
-**Tips:**
-- Use `clamp_negative: False` when working with difference mode to preserve negative values for further processing
-- Enable `clamp_negative: True` for final output to ensure valid image data
-- Experiment with different blend modes for creative effects
 
 ### TiledWan Image Statistics
 The TiledWan Image Statistics node can be found in the "TiledWan" category in the ComfyUI node browser.
@@ -140,3 +122,33 @@ The TiledWan Image Statistics node can be found in the "TiledWan" category in th
 - Use the output values in mathematical nodes for dynamic workflow control
 - Check the console output for warnings about potential image issues
 - The pass-through design allows you to insert this node anywhere without breaking your workflow
+
+### TiledWan Mask Statistics
+The TiledWan Mask Statistics node can be found in the "TiledWan" category in the ComfyUI node browser.
+
+1. Connect any mask to the input
+2. Enable or disable connected components analysis based on your needs
+3. Run the workflow - statistics will be displayed in the ComfyUI console
+4. The node also outputs individual statistic values and white pixel count for further processing
+
+**Console Output includes:**
+- **Basic Info**: Mask dimensions, total pixels, memory usage, data type
+- **Global Statistics**: Min, max, mean, median, variance, standard deviation
+- **Mask-Specific Analysis**: White/black pixel counts, coverage percentage, density classification
+- **Value Distribution**: Exact counts for simple masks or histogram for complex ones
+- **Connected Components**: Estimated number and size of separate mask regions
+- **Quality Assessment**: Binary mask detection, uniformity warnings
+
+**Use Cases:**
+- **Mask Quality Control**: Verify mask coverage and density
+- **Segmentation Analysis**: Understand mask complexity and component distribution  
+- **Workflow Optimization**: Use coverage data to skip processing on empty masks
+- **Debugging**: Identify issues with mask generation or processing
+- **Data Analysis**: Extract numerical mask properties for decision making
+
+**Tips:**
+- Enable connected components analysis for segmentation masks to understand object count
+- Use the white_pixel_count output to conditionally process based on mask coverage
+- Perfect binary masks (0 and 1 only) will be automatically detected and reported
+- The pass-through design allows insertion anywhere in mask processing workflows
+- Check console warnings for potential mask quality issues
