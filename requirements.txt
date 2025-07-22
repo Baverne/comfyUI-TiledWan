@@ -1,0 +1,2 @@
+# TiledWan ComfyUI Node Set Requirements
+# This node set currently has no additional dependencies beyond ComfyUI's base requirements
