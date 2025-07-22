@@ -80,6 +80,79 @@ Analyze masks and display comprehensive statistics including coverage, density, 
 - Mask quality assessment: binary mask detection, uniformity analysis
 - Automatic issue detection: negative values, out-of-range values, sparse/dense masks
 
+### TiledWan Video Sampler Test Concat
+A comprehensive pipeline node that chains multiple WanVideo operations into a single node. This is a test/development node that combines WanVideoSampler, WanVideoTeaCache, WanVideoVACEEncode, WanVideoSLG, WanVideoExperimentalArgs, and WanVideoDecode for streamlined video generation.
+
+**Inputs (Required):**
+- `model`: WANVIDEOMODEL - The WanVideo model to use for generation
+- `vae`: WANVAE - The VAE for encoding/decoding video latents
+- `image_embeds`: WANVIDIMAGE_EMBEDS - Image embeddings for the video
+- `steps`: INT - Number of sampling steps (default: 30)
+- `cfg`: FLOAT - Classifier-free guidance scale (default: 6.0) 
+- `shift`: FLOAT - Shift parameter for scheduler (default: 5.0)
+- `seed`: INT - Random seed for generation
+- `scheduler`: COMBO - Sampling scheduler type (unipc, euler, dpm++, etc.)
+
+**TeaCache Parameters:**
+- `teacache_rel_l1_thresh`: FLOAT - TeaCache threshold for caching decisions (default: 0.3)
+- `teacache_start_step`: INT - Step to start applying TeaCache (default: 1)
+- `teacache_end_step`: INT - Step to end applying TeaCache (default: -1)
+- `teacache_use_coefficients`: BOOLEAN - Use calculated coefficients for accuracy (default: True)
+
+**VACE Encode Parameters:**
+- `vace_width`: INT - Video width in pixels (default: 832)
+- `vace_height`: INT - Video height in pixels (default: 480)
+- `vace_num_frames`: INT - Number of frames to generate (default: 81)
+- `vace_strength`: FLOAT - VACE encoding strength (default: 1.0)
+- `vace_start_percent`: FLOAT - Start percentage for VACE application (default: 0.0)
+- `vace_end_percent`: FLOAT - End percentage for VACE application (default: 1.0)
+
+**SLG Parameters:**
+- `slg_blocks`: STRING - Transformer blocks to skip unconditioned guidance on (default: "10")
+- `slg_start_percent`: FLOAT - Start percentage for SLG application (default: 0.1)
+- `slg_end_percent`: FLOAT - End percentage for SLG application (default: 1.0)
+
+**Experimental Parameters:**
+- `exp_video_attention_split_steps`: STRING - Steps to split video attention for multiple prompts
+- `exp_cfg_zero_star`: BOOLEAN - Enable CFG Zero Star optimization (default: False)
+- `exp_use_zero_init`: BOOLEAN - Use zero initialization (default: False)
+- `exp_zero_star_steps`: INT - Number of zero star steps (default: 0)
+- `exp_use_fresca`: BOOLEAN - Enable FreSca frequency scaling (default: False)
+- `exp_fresca_scale_low`: FLOAT - FreSca low frequency scale (default: 1.0)
+- `exp_fresca_scale_high`: FLOAT - FreSca high frequency scale (default: 1.25)
+- `exp_fresca_freq_cutoff`: INT - FreSca frequency cutoff (default: 20)
+
+**Decode Parameters:**
+- `decode_enable_vae_tiling`: BOOLEAN - Enable VAE tiling for memory efficiency (default: False)
+- `decode_tile_x`: INT - VAE tile width in pixels (default: 272)
+- `decode_tile_y`: INT - VAE tile height in pixels (default: 272)
+- `decode_tile_stride_x`: INT - VAE tile stride X (default: 144)
+- `decode_tile_stride_y`: INT - VAE tile stride Y (default: 128)
+
+**Optional Inputs:**
+- `text_embeds`: WANVIDEOTEXTEMBEDS - Text embeddings for guided generation
+- `samples`: LATENT - Initial latents for video-to-video processing
+- `denoise_strength`: FLOAT - Denoising strength for v2v (default: 1.0)
+- `vace_input_frames`: IMAGE - Input frames for VACE conditioning
+- `vace_ref_images`: IMAGE - Reference images for VACE
+- `vace_input_masks`: MASK - Input masks for VACE
+- And many more optional parameters for fine control...
+
+**Outputs:**
+- `video`: IMAGE - Generated video frames as image sequence
+- `latents`: LATENT - The generated latent representation
+
+**Features:**
+- **Complete Pipeline**: Integrates the entire WanVideo generation stack in one node
+- **TeaCache Optimization**: Automatic caching for faster inference
+- **VACE Encoding**: Advanced video-aware conditional encoding
+- **SLG Guidance**: Selective layer guidance for improved quality
+- **Experimental Features**: Access to cutting-edge techniques like FreSca and CFG Zero Star
+- **Memory Efficient**: VAE tiling options for high-resolution generation
+- **Progress Tracking**: Detailed console output showing pipeline progress
+- **Error Handling**: Graceful fallback with dummy outputs if errors occur
+- **Flexible Parameters**: Comprehensive control over every aspect of generation
+
 ## Usage
 
 ### TiledWan Image To Mask
@@ -152,3 +225,35 @@ The TiledWan Mask Statistics node can be found in the "TiledWan" category in the
 - Perfect binary masks (0 and 1 only) will be automatically detected and reported
 - The pass-through design allows insertion anywhere in mask processing workflows
 - Check console warnings for potential mask quality issues
+
+### TiledWan Video Sampler Test Concat
+The TiledWan Video Sampler Test Concat node can be found in the "TiledWan" category in the ComfyUI node browser.
+
+1. **Connect Required Inputs**: Connect your WanVideo model, VAE, and image embeddings
+2. **Configure Basic Parameters**: Set steps, CFG, shift, seed, and scheduler
+3. **Adjust Advanced Settings**: Fine-tune TeaCache, VACE, SLG, and experimental parameters as needed
+4. **Optional Inputs**: Connect text embeddings, input frames, or masks if using advanced features
+5. **Run the Workflow**: The node will execute the complete pipeline and output video frames
+
+**Console Output includes:**
+- **Pipeline Progress**: Step-by-step execution progress with emojis for visual tracking
+- **Parameter Setup**: Confirmation of TeaCache, SLG, and experimental argument preparation
+- **VACE Processing**: VACE encoding progress and configuration
+- **Sampling Progress**: WanVideo sampling execution with all optimizations
+- **Decoding Progress**: VAE decoding with optional tiling information
+- **Error Handling**: Detailed error messages if any step fails
+
+**Use Cases:**
+- **Rapid Prototyping**: Test complete WanVideo pipelines without connecting multiple nodes
+- **Parameter Testing**: Experiment with different WanVideo settings in a single node
+- **Production Workflows**: Use as a complete video generation solution
+- **Educational**: Learn how WanVideo components work together
+- **Development**: Test new WanVideo features and optimizations
+
+**Tips:**
+- Start with default parameters and adjust gradually based on results
+- Enable TeaCache for faster inference but watch for quality trade-offs
+- Use VAE tiling if running out of VRAM during decoding
+- Check console output for detailed progress and error information
+- The node includes error handling but check inputs carefully for best results
+- Consider memory usage when setting high frame counts or resolutions

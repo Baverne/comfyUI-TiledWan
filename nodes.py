@@ -435,17 +435,336 @@ class MaskStatistics:
         return (mask, min_val, max_val, mean_val, variance_val, median_val, white_pixels)
 
 
+class TiledWanVideoSamplerTestConcat:
+    """
+    A test node that concatenates and executes a WanVideo pipeline by chaining:
+    WanVideoSampler -> WanVideoTeaCache -> WanVideoVACEEncode -> WanVideoSLG -> WanVideoExperimentalArgs -> WanVideoDecode
+    """
+    
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        """
+        Combine all input types from the WanVideo nodes we want to chain
+        """
+        return {
+            "required": {
+                # Core WanVideoSampler inputs
+                "model": ("WANVIDEOMODEL",),
+                "vae": ("WANVAE",),
+                "image_embeds": ("WANVIDIMAGE_EMBEDS",),
+                "steps": ("INT", {"default": 30, "min": 1}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
+                    {"default": 'unipc'}),
+                
+                # TeaCache inputs
+                "teacache_rel_l1_thresh": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "teacache_start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1}),
+                "teacache_end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1}),
+                "teacache_use_coefficients": ("BOOLEAN", {"default": True}),
+                
+                # VACE Encode inputs
+                "vace_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8}),
+                "vace_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8}),
+                "vace_num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4}),
+                "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
+                "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                
+                # SLG inputs
+                "slg_blocks": ("STRING", {"default": "10"}),
+                "slg_start_percent": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "slg_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                
+                # Experimental Args inputs
+                "exp_video_attention_split_steps": ("STRING", {"default": ""}),
+                "exp_cfg_zero_star": ("BOOLEAN", {"default": False}),
+                "exp_use_zero_init": ("BOOLEAN", {"default": False}),
+                "exp_zero_star_steps": ("INT", {"default": 0, "min": 0}),
+                "exp_use_fresca": ("BOOLEAN", {"default": False}),
+                "exp_fresca_scale_low": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+                "exp_fresca_scale_high": ("FLOAT", {"default": 1.25, "min": 0.0, "max": 10.0, "step": 0.01}),
+                "exp_fresca_freq_cutoff": ("INT", {"default": 20, "min": 0, "max": 10000, "step": 1}),
+                
+                # Decode inputs
+                "decode_enable_vae_tiling": ("BOOLEAN", {"default": False}),
+                "decode_tile_x": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
+                "decode_tile_y": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
+                "decode_tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2040, "step": 8}),
+                "decode_tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8}),
+            },
+            "optional": {
+                # Optional inputs from various nodes
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",),
+                "samples": ("LATENT",),
+                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "force_offload": ("BOOLEAN", {"default": True}),
+                "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "teacache_cache_device": (["main_device", "offload_device"], {"default": "offload_device"}),
+                "teacache_mode": (["e", "e0"], {"default": "e"}),
+                "vace_input_frames": ("IMAGE",),
+                "vace_ref_images": ("IMAGE",),
+                "vace_input_masks": ("MASK",),
+                "vace_tiled_vae": ("BOOLEAN", {"default": False}),
+                "decode_normalization": (["default", "minmax"], {"default": "default"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "LATENT")
+    RETURN_NAMES = ("video", "latents")
+    FUNCTION = "process_wanvideo_pipeline"
+    OUTPUT_NODE = True
+    CATEGORY = "TiledWan"
+
+    def process_wanvideo_pipeline(self, **kwargs):
+        """
+        Execute the complete WanVideo pipeline by chaining the nodes
+        """
+        
+        print("\n" + "="*80)
+        print("                    TILEDWAN WANVIDEO PIPELINE")
+        print("="*80)
+        print("🚀 Starting WanVideo pipeline execution...")
+        
+        try:
+            # Import the WanVideo nodes we need
+            import sys
+            import os
+            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
+            sys.path.append(custom_nodes_path)
+            
+            from nodes import (WanVideoSampler, WanVideoTeaCache, WanVideoVACEEncode, 
+                              WanVideoSLG, WanVideoExperimentalArgs, WanVideoDecode)
+            
+            # Step 1: Create TeaCache arguments
+            print("📦 Step 1: Preparing TeaCache arguments...")
+            cache_device = kwargs.get("teacache_cache_device", "offload_device")
+            if cache_device == "main_device":
+                import comfy.model_management as mm
+                cache_device = mm.get_torch_device()
+            else:
+                import comfy.model_management as mm
+                cache_device = mm.unet_offload_device()
+            
+            teacache_args = {
+                "cache_type": "TeaCache",
+                "rel_l1_thresh": kwargs.get("teacache_rel_l1_thresh", 0.3),
+                "start_step": kwargs.get("teacache_start_step", 1),
+                "end_step": kwargs.get("teacache_end_step", -1),
+                "cache_device": cache_device,
+                "use_coefficients": kwargs.get("teacache_use_coefficients", True),
+                "mode": kwargs.get("teacache_mode", "e"),
+            }
+            
+            # Step 2: Create SLG arguments
+            print("📦 Step 2: Preparing SLG arguments...")
+            slg_node = WanVideoSLG()
+            slg_args = slg_node.process(
+                kwargs.get("slg_blocks", "10"),
+                kwargs.get("slg_start_percent", 0.1),
+                kwargs.get("slg_end_percent", 1.0)
+            )[0]
+            
+            # Step 3: Create Experimental arguments
+            print("📦 Step 3: Preparing Experimental arguments...")
+            exp_node = WanVideoExperimentalArgs()
+            exp_args = exp_node.process(
+                video_attention_split_steps=kwargs.get("exp_video_attention_split_steps", ""),
+                cfg_zero_star=kwargs.get("exp_cfg_zero_star", False),
+                use_zero_init=kwargs.get("exp_use_zero_init", False),
+                zero_star_steps=kwargs.get("exp_zero_star_steps", 0),
+                use_fresca=kwargs.get("exp_use_fresca", False),
+                fresca_scale_low=kwargs.get("exp_fresca_scale_low", 1.0),
+                fresca_scale_high=kwargs.get("exp_fresca_scale_high", 1.25),
+                fresca_freq_cutoff=kwargs.get("exp_fresca_freq_cutoff", 20)
+            )[0]
+            
+            # Step 4: Create VACE embeds if needed (this might be created before sampling)
+            print("📦 Step 4: Preparing VACE embeds...")
+            vace_node = WanVideoVACEEncode()
+            vace_embeds = vace_node.process(
+                vae=kwargs["vae"],
+                width=kwargs.get("vace_width", 832),
+                height=kwargs.get("vace_height", 480),
+                num_frames=kwargs.get("vace_num_frames", 81),
+                strength=kwargs.get("vace_strength", 1.0),
+                vace_start_percent=kwargs.get("vace_start_percent", 0.0),
+                vace_end_percent=kwargs.get("vace_end_percent", 1.0),
+                input_frames=kwargs.get("vace_input_frames"),
+                ref_images=kwargs.get("vace_ref_images"),
+                input_masks=kwargs.get("vace_input_masks"),
+                tiled_vae=kwargs.get("vace_tiled_vae", False)
+            )[0]
+            
+            # Step 5: Run the sampler with all arguments
+            print("🎯 Step 5: Running WanVideo Sampler...")
+            sampler_node = WanVideoSampler()
+            latent_samples = sampler_node.process(
+                model=kwargs["model"],
+                image_embeds=vace_embeds,  # Use the VACE embeds we created
+                steps=kwargs.get("steps", 30),
+                cfg=kwargs.get("cfg", 6.0),
+                shift=kwargs.get("shift", 5.0),
+                seed=kwargs.get("seed", 0),
+                scheduler=kwargs.get("scheduler", "unipc"),
+                riflex_freq_index=kwargs.get("riflex_freq_index", 0),
+                text_embeds=kwargs.get("text_embeds"),
+                samples=kwargs.get("samples"),
+                denoise_strength=kwargs.get("denoise_strength", 1.0),
+                force_offload=kwargs.get("force_offload", True),
+                cache_args=teacache_args,
+                slg_args=slg_args,
+                experimental_args=exp_args
+            )[0]
+            
+            # Step 6: Decode the latents to video
+            print("🎬 Step 6: Decoding latents to video...")
+            decode_node = WanVideoDecode()
+            video_output = decode_node.decode(
+                vae=kwargs["vae"],
+                samples=latent_samples,
+                enable_vae_tiling=kwargs.get("decode_enable_vae_tiling", False),
+                tile_x=kwargs.get("decode_tile_x", 272),
+                tile_y=kwargs.get("decode_tile_y", 272),
+                tile_stride_x=kwargs.get("decode_tile_stride_x", 144),
+                tile_stride_y=kwargs.get("decode_tile_stride_y", 128),
+                normalization=kwargs.get("decode_normalization", "default")
+            )[0]
+            
+            print("✅ WanVideo pipeline completed successfully!")
+            print("="*80 + "\n")
+            
+            return (video_output, latent_samples)
+            
+        except Exception as e:
+            print(f"❌ Error in WanVideo pipeline: {str(e)}")
+            print("="*80 + "\n")
+            
+            # Return dummy outputs in case of error
+            dummy_video = torch.zeros((1, 64, 64, 3))  # Dummy video frame
+            dummy_latent = {"samples": torch.zeros((1, 16, 10, 8, 8))}  # Dummy latent
+            
+            return (dummy_video, dummy_latent)
+
+
+class TiledWanVideoSamplerSimple:
+    """
+    A simple test node that only wraps the WanVideoSampler for easier debugging.
+    This node exposes only the essential WanVideoSampler parameters without chaining other nodes.
+    """
+    
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        """
+        Basic WanVideoSampler inputs only
+        """
+        return {
+            "required": {
+                # Core WanVideoSampler inputs
+                "model": ("WANVIDEOMODEL",),
+                "image_embeds": ("WANVIDIMAGE_EMBEDS",),
+                "steps": ("INT", {"default": 30, "min": 1}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
+                    {"default": 'unipc'}),
+            },
+            "optional": {
+                # Optional inputs
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",),
+                "samples": ("LATENT",),
+                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "force_offload": ("BOOLEAN", {"default": True}),
+                "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("latents",)
+    FUNCTION = "process_sampler"
+    OUTPUT_NODE = True
+    CATEGORY = "TiledWan"
+
+    def process_sampler(self, **kwargs):
+        """
+        Execute only the WanVideoSampler
+        """
+        
+        print("\n" + "="*80)
+        print("                TILEDWAN WANVIDEO SAMPLER SIMPLE")
+        print("="*80)
+        print("🚀 Starting simple WanVideo sampler...")
+        
+        try:
+            # Import the WanVideoSampler
+            import sys
+            import os
+            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
+            sys.path.append(custom_nodes_path)
+            
+            from nodes import WanVideoSampler
+            
+            print("🎯 Running WanVideoSampler with basic parameters...")
+            
+            # Run the sampler with basic arguments (no cache, no slg, no experimental)
+            sampler_node = WanVideoSampler()
+            latent_samples = sampler_node.process(
+                model=kwargs["model"],
+                image_embeds=kwargs["image_embeds"],
+                steps=kwargs.get("steps", 30),
+                cfg=kwargs.get("cfg", 6.0),
+                shift=kwargs.get("shift", 5.0),
+                seed=kwargs.get("seed", 0),
+                scheduler=kwargs.get("scheduler", "unipc"),
+                riflex_freq_index=kwargs.get("riflex_freq_index", 0),
+                text_embeds=kwargs.get("text_embeds"),
+                samples=kwargs.get("samples"),
+                denoise_strength=kwargs.get("denoise_strength", 1.0),
+                force_offload=kwargs.get("force_offload", True),
+                cache_args=None,  # No cache for simplicity
+                slg_args=None,    # No SLG for simplicity
+                experimental_args=None  # No experimental args for simplicity
+            )[0]
+            
+            print("✅ Simple WanVideo sampler completed successfully!")
+            print("="*80 + "\n")
+            
+            return (latent_samples,)
+            
+        except Exception as e:
+            print(f"❌ Error in simple WanVideo sampler: {str(e)}")
+            print("="*80 + "\n")
+            
+            # Return dummy output in case of error
+            dummy_latent = {"samples": torch.zeros((1, 16, 10, 8, 8))}  # Dummy latent
+            
+            return (dummy_latent,)
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
     "TiledWanImageToMask": ImageToMask,
     "TiledWanImageStatistics": ImageStatistics,
-    "TiledWanMaskStatistics": MaskStatistics
+    "TiledWanMaskStatistics": MaskStatistics,
+    "TiledWanVideoSamplerTestConcat": TiledWanVideoSamplerTestConcat,
+    "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageToMask": "TiledWan Image To Mask",
     "TiledWanImageStatistics": "TiledWan Image Statistics",
-    "TiledWanMaskStatistics": "TiledWan Mask Statistics"
+    "TiledWanMaskStatistics": "TiledWan Mask Statistics",
+    "TiledWanVideoSamplerTestConcat": "TiledWan Video Sampler Test Concat",
+    "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple"
 }
