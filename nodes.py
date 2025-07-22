@@ -709,11 +709,13 @@ class TiledWanVideoSamplerSimple:
             import sys
             import os
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
-            sys.path.append(custom_nodes_path)
+            if custom_nodes_path not in sys.path:
+                sys.path.append(custom_nodes_path)
             
             from nodes import WanVideoSampler
             
             print("🎯 Running WanVideoSampler with basic parameters...")
+            print(f"📊 Parameters received: {list(kwargs.keys())}")
             
             # Run the sampler with basic arguments (no cache, no slg, no experimental)
             sampler_node = WanVideoSampler()
@@ -730,18 +732,34 @@ class TiledWanVideoSamplerSimple:
                 samples=kwargs.get("samples"),
                 denoise_strength=kwargs.get("denoise_strength", 1.0),
                 force_offload=kwargs.get("force_offload", True),
-                cache_args=None,  # No cache for simplicity
-                slg_args=None,    # No SLG for simplicity
-                experimental_args=None  # No experimental args for simplicity
+                # Optional args set to None for simplicity
+                cache_args=None,
+                feta_args=None,
+                context_options=None,
+                flowedit_args=None,
+                batched_cfg=False,
+                slg_args=None,
+                rope_function="default",
+                loop_args=None,
+                experimental_args=None,
+                sigmas=None,
+                unianimate_poses=None,
+                fantasytalking_embeds=None,
+                uni3c_embeds=None,
+                multitalk_embeds=None,
+                freeinit_args=None
             )[0]
             
             print("✅ Simple WanVideo sampler completed successfully!")
+            print(f"📤 Output shape: {latent_samples.get('samples', 'Unknown').shape if hasattr(latent_samples.get('samples', None), 'shape') else 'No shape info'}")
             print("="*80 + "\n")
             
             return (latent_samples,)
             
         except Exception as e:
+            import traceback
             print(f"❌ Error in simple WanVideo sampler: {str(e)}")
+            print(f"📋 Traceback: {traceback.format_exc()}")
             print("="*80 + "\n")
             
             # Return dummy output in case of error
