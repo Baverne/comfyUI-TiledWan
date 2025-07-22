@@ -243,7 +243,13 @@ class ImageStatistics:
         
         # Calculate median (flatten the tensor first)
         flattened = image.flatten()
-        median_val = torch.median(flattened).values.item()
+        # Sort and find median manually to avoid compatibility issues
+        sorted_values = torch.sort(flattened).values
+        n = len(sorted_values)
+        if n % 2 == 0:
+            median_val = (sorted_values[n//2 - 1] + sorted_values[n//2]).item() / 2.0
+        else:
+            median_val = sorted_values[n//2].item()
         
         # Additional useful statistics
         non_zero_count = torch.count_nonzero(image).item()
@@ -270,7 +276,14 @@ class ImageStatistics:
                 ch_min = channel_data.min().item()
                 ch_max = channel_data.max().item()
                 ch_mean = channel_data.mean().item()
-                ch_median = torch.median(channel_data.flatten()).values.item()
+                # Calculate median manually for compatibility
+                ch_flattened = channel_data.flatten()
+                ch_sorted = torch.sort(ch_flattened).values
+                ch_n = len(ch_sorted)
+                if ch_n % 2 == 0:
+                    ch_median = (ch_sorted[ch_n//2 - 1] + ch_sorted[ch_n//2]).item() / 2.0
+                else:
+                    ch_median = ch_sorted[ch_n//2].item()
                 ch_std = channel_data.std().item()
                 
                 print(f"{channel_names[c]} Channel:")
@@ -295,7 +308,7 @@ class ImageStatistics:
         # Percentiles
         print("\n--- Percentiles ---")
         percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
-        sorted_values = torch.sort(flattened).values
+        # Use the already sorted values from median calculation
         for p in percentiles:
             idx = int((p / 100.0) * (len(sorted_values) - 1))
             value = sorted_values[idx].item()
