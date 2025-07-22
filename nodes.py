@@ -768,6 +768,101 @@ class TiledWanVideoSamplerSimple:
             return (dummy_latent,)
 
 
+class TiledWanVideoSLGSimple:
+    """
+    A very simple test node that only wraps WanVideoSLG for debugging.
+    This is the simplest possible wrapper to test import and basic functionality.
+    """
+    
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        """
+        Basic WanVideoSLG inputs only
+        """
+        return {
+            "required": {
+                "blocks": ("STRING", {"default": "10"}),
+                "start_percent": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+            },
+        }
+
+    RETURN_TYPES = ("SLGARGS",)
+    RETURN_NAMES = ("slg_args",)
+    FUNCTION = "process_slg"
+    OUTPUT_NODE = True
+    CATEGORY = "TiledWan"
+
+    def process_slg(self, **kwargs):
+        """
+        Execute only the WanVideoSLG
+        """
+        
+        print("\n" + "="*80)
+        print("                TILEDWAN WANVIDEO SLG SIMPLE")
+        print("="*80)
+        print("🚀 Starting simple WanVideoSLG test...")
+        
+        try:
+            # Import the WanVideoSLG
+            import sys
+            import os
+            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
+            print(f"🔍 Looking for WanVideo nodes in: {custom_nodes_path}")
+            
+            if custom_nodes_path not in sys.path:
+                sys.path.append(custom_nodes_path)
+                print(f"📁 Added to sys.path: {custom_nodes_path}")
+            
+            # Test if the path exists
+            if os.path.exists(custom_nodes_path):
+                print(f"✅ Path exists: {custom_nodes_path}")
+                nodes_file = os.path.join(custom_nodes_path, "nodes.py")
+                if os.path.exists(nodes_file):
+                    print(f"✅ nodes.py found: {nodes_file}")
+                else:
+                    print(f"❌ nodes.py NOT found: {nodes_file}")
+            else:
+                print(f"❌ Path does NOT exist: {custom_nodes_path}")
+            
+            print("🔄 Attempting import...")
+            from nodes import WanVideoSLG
+            print("✅ Import successful!")
+            
+            print("🎯 Running WanVideoSLG with basic parameters...")
+            print(f"📊 Parameters received: {list(kwargs.keys())}")
+            
+            # Run the SLG node
+            slg_node = WanVideoSLG()
+            slg_args = slg_node.process(
+                blocks=kwargs.get("blocks", "10"),
+                start_percent=kwargs.get("start_percent", 0.1),
+                end_percent=kwargs.get("end_percent", 1.0)
+            )[0]
+            
+            print("✅ Simple WanVideoSLG completed successfully!")
+            print(f"📤 Output type: {type(slg_args)}")
+            print(f"📤 Output content: {slg_args}")
+            print("="*80 + "\n")
+            
+            return (slg_args,)
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error in simple WanVideoSLG: {str(e)}")
+            print(f"📋 Full traceback:")
+            print(traceback.format_exc())
+            print("="*80 + "\n")
+            
+            # Return dummy output in case of error
+            dummy_slg = {"slg_blocks": "10", "start_percent": 0.1, "end_percent": 1.0}
+            
+            return (dummy_slg,)
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
@@ -775,7 +870,8 @@ NODE_CLASS_MAPPINGS = {
     "TiledWanImageStatistics": ImageStatistics,
     "TiledWanMaskStatistics": MaskStatistics,
     "TiledWanVideoSamplerTestConcat": TiledWanVideoSamplerTestConcat,
-    "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple
+    "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple,
+    "TiledWanVideoSLGSimple": TiledWanVideoSLGSimple
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -784,5 +880,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageStatistics": "TiledWan Image Statistics",
     "TiledWanMaskStatistics": "TiledWan Mask Statistics",
     "TiledWanVideoSamplerTestConcat": "TiledWan Video Sampler Test Concat",
-    "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple"
+    "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple",
+    "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple"
 }
