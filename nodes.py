@@ -535,23 +535,26 @@ class TiledWanVideoSamplerTestConcat:
             # Import the WanVideo nodes we need
             import sys
             import os
-            import importlib.util
+            import importlib
             
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             sys.path.append(custom_nodes_path)
             
-            # Import the specific file directly to avoid name conflict
-            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
-            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
-            wanvideo_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(wanvideo_module)
+            # Add parent directory to sys.path and import normally
+            parent_path = os.path.dirname(custom_nodes_path)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
             
-            WanVideoSampler = wanvideo_module.WanVideoSampler
-            WanVideoTeaCache = wanvideo_module.WanVideoTeaCache
-            WanVideoVACEEncode = wanvideo_module.WanVideoVACEEncode
-            WanVideoSLG = wanvideo_module.WanVideoSLG
-            WanVideoExperimentalArgs = wanvideo_module.WanVideoExperimentalArgs
-            WanVideoDecode = wanvideo_module.WanVideoDecode
+            # Import the package normally to handle relative imports
+            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
+            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
+            
+            WanVideoSampler = wanvideo_package.WanVideoSampler
+            WanVideoTeaCache = wanvideo_package.WanVideoTeaCache
+            WanVideoVACEEncode = wanvideo_package.WanVideoVACEEncode
+            WanVideoSLG = wanvideo_package.WanVideoSLG
+            WanVideoExperimentalArgs = wanvideo_package.WanVideoExperimentalArgs
+            WanVideoDecode = wanvideo_package.WanVideoDecode
             
             # Step 1: Create TeaCache arguments
             print("📦 Step 1: Preparing TeaCache arguments...")
@@ -720,19 +723,22 @@ class TiledWanVideoSamplerSimple:
             # Import the WanVideoSampler
             import sys
             import os
-            import importlib.util
+            import importlib
             
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             if custom_nodes_path not in sys.path:
                 sys.path.append(custom_nodes_path)
             
-            # Import the specific file directly to avoid name conflict
-            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
-            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
-            wanvideo_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(wanvideo_module)
+            # Add parent directory to sys.path and import normally
+            parent_path = os.path.dirname(custom_nodes_path)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
             
-            WanVideoSampler = wanvideo_module.WanVideoSampler
+            # Import the package normally to handle relative imports
+            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
+            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
+            
+            WanVideoSampler = wanvideo_package.WanVideoSampler
             
             print("🎯 Running WanVideoSampler with basic parameters...")
             print(f"📊 Parameters received: {list(kwargs.keys())}")
@@ -850,14 +856,18 @@ class TiledWanVideoSLGSimple:
             
             print("🔄 Attempting import...")
             
-            # Solution: Import the specific file directly to avoid name conflict
-            import importlib.util
-            nodes_file = os.path.join(custom_nodes_path, "nodes.py")
-            spec = importlib.util.spec_from_file_location("wanvideo_nodes", nodes_file)
-            wanvideo_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(wanvideo_module)
+            # Solution: Add parent directory to sys.path and import normally
+            parent_path = os.path.dirname(custom_nodes_path)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
+                print(f"📁 Added parent to sys.path: {parent_path}")
             
-            WanVideoSLG = wanvideo_module.WanVideoSLG
+            # Import the package normally to handle relative imports
+            import importlib
+            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
+            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
+            
+            WanVideoSLG = wanvideo_package.WanVideoSLG
             print("✅ Import successful!")
             
             print("🎯 Running WanVideoSLG with basic parameters...")
