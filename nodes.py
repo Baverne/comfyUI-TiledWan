@@ -1192,23 +1192,69 @@ class TileAndStitchBack:
         return transformed
     
     def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end):
-        """Place tile into target tensor, handling overlaps by averaging"""
+        """Place tile into target tensor, handling overlaps with spatial fade blending"""
         tile_h, tile_w = tile.shape[1:3]
         
-        # Simple placement - for overlapping regions, we'll average
-        # In a more sophisticated implementation, you might use feathering/blending
-        existing = target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :]
+        # Get the target region
+        target_region = target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :]
         
         # Check if there's existing content (non-zero) in the target area
-        if existing.sum() > 0:
-            # Average with existing content in overlap regions
-            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = (existing + tile) * 0.5
+        if target_region.sum() > 0:
+            # Create spatial fade mask for smooth blending
+            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
+            
+            # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
+            blended = target_region * (1.0 - fade_mask) + tile * fade_mask
+            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = blended
         else:
             # First tile in this area, just place it
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
     
+    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
+        """Create a spatial fade mask for smooth blending between tiles"""
+        # Create base mask (1.0 = use new tile, 0.0 = use existing)
+        mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
+        
+        # Define fade distance (how many pixels to fade over)
+        fade_h = min(10, tile_h // 4)  # Fade over 10 pixels or 1/4 of tile height
+        fade_w = min(10, tile_w // 4)  # Fade over 10 pixels or 1/4 of tile width
+        
+        # Check which edges have existing content to determine fade direction
+        has_top = existing[:, :fade_h, :, :].sum() > 0
+        has_bottom = existing[:, -fade_h:, :, :].sum() > 0
+        has_left = existing[:, :, :fade_w, :].sum() > 0
+        has_right = existing[:, :, -fade_w:, :].sum() > 0
+        
+        # Create fade gradients for each edge that has existing content
+        if has_top:
+            # Fade from 0 at top to 1 after fade_h pixels
+            for i in range(fade_h):
+                alpha = i / fade_h
+                mask[:, i, :, :] = alpha
+        
+        if has_bottom:
+            # Fade from 1 before last fade_h pixels to 0 at bottom
+            for i in range(fade_h):
+                alpha = 1.0 - (i / fade_h)
+                mask[:, tile_h - 1 - i, :, :] = alpha
+        
+        if has_left:
+            # Fade from 0 at left to 1 after fade_w pixels
+            for i in range(fade_w):
+                alpha = i / fade_w
+                mask[:, :, i, :] = torch.min(mask[:, :, i, :], alpha)
+        
+        if has_right:
+            # Fade from 1 before last fade_w pixels to 0 at right
+            for i in range(fade_w):
+                alpha = 1.0 - (i / fade_w)
+                mask[:, :, tile_w - 1 - i, :] = torch.min(mask[:, :, tile_w - 1 - i, :], alpha)
+        
+        # Broadcast mask to match tile dimensions
+        return mask.expand_as(new_tile)
+    
     def _stitch_temporal_chunks(self, chunks, temporal_tiles, total_frames, height, width, channels, overlap):
-        """Stitch temporal chunks back together handling overlaps"""
+        """Stitch temporal chunks back together with temporal fade blending"""
         result = torch.zeros((total_frames, height, width, channels), dtype=chunks[0].dtype, device=chunks[0].device)
         
         for i, ((t_start, t_end), chunk) in enumerate(zip(temporal_tiles, chunks)):
@@ -1218,20 +1264,26 @@ class TileAndStitchBack:
                 # First chunk, place directly
                 result[t_start:t_start+chunk_frames] = chunk
             else:
-                # Handle overlap with previous chunk
+                # Handle overlap with previous chunk using temporal fade
                 prev_end = temporal_tiles[i-1][1]
                 overlap_start = max(t_start, prev_end - overlap)
                 overlap_end = min(t_end, prev_end)
                 
                 if overlap_start < overlap_end:
-                    # There's an overlap, blend the frames
+                    # There's an overlap, apply temporal fade blending
                     overlap_frames = overlap_end - overlap_start
                     chunk_overlap_start = overlap_start - t_start
                     
-                    # Average the overlapping frames
-                    existing = result[overlap_start:overlap_end]
+                    # Get overlapping regions
+                    existing_frames = result[overlap_start:overlap_end]
                     new_frames = chunk[chunk_overlap_start:chunk_overlap_start+overlap_frames]
-                    result[overlap_start:overlap_end] = (existing + new_frames) * 0.5
+                    
+                    # Create temporal fade mask
+                    fade_mask = self._create_temporal_fade_mask(overlap_frames, existing_frames.dtype, existing_frames.device)
+                    
+                    # Apply temporal fade: existing * (1 - fade) + new * fade
+                    blended_frames = existing_frames * (1.0 - fade_mask) + new_frames * fade_mask
+                    result[overlap_start:overlap_end] = blended_frames
                     
                     # Place non-overlapping frames
                     if overlap_end < t_start + chunk_frames:
@@ -1243,6 +1295,16 @@ class TileAndStitchBack:
                     result[t_start:t_start+chunk_frames] = chunk
         
         return result
+    
+    def _create_temporal_fade_mask(self, overlap_frames, dtype, device):
+        """Create a temporal fade mask for smooth frame transitions"""
+        # Create fade mask: 0.0 at start (keep existing) to 1.0 at end (use new)
+        fade_values = torch.linspace(0.0, 1.0, overlap_frames, dtype=dtype, device=device)
+        
+        # Reshape to broadcast properly: [frames, 1, 1, 1]
+        fade_mask = fade_values.view(overlap_frames, 1, 1, 1)
+        
+        return fade_mask
     
     def _generate_tile_info_summary(self, tile_info_list, temporal_tiles, spatial_tiles_h, spatial_tiles_w):
         """Generate a summary of the tiling process"""
