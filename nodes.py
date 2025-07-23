@@ -2,6 +2,11 @@ import torch
 import comfy.utils
 import comfy.model_management
 import node_helpers
+import random
+import os
+import sys
+import importlib
+import traceback
 
 
 class ImageToMask:
@@ -1055,9 +1060,9 @@ class TileAndStitchBack:
                         tile_transformed = self._apply_color_shift(tile, color_shift_strength, 
                                                                  temporal_idx, h_idx, w_idx)
                         
-                        # Place tile back (handle overlaps by averaging)
+                        # Place tile back (handle overlaps with fade blending)
                         self._place_tile_with_overlap(chunk_processed, tile_transformed, 
-                                                    h_start, h_end, w_start, w_end)
+                                                    h_start, h_end, w_start, w_end, color_shift_strength)
                         
                         # Record tile info
                         tile_info = {
@@ -1090,7 +1095,6 @@ class TileAndStitchBack:
             return (stitched_video, tile_info_summary)
             
         except Exception as e:
-            import traceback
             print(f"❌ Error in tile and stitch: {str(e)}")
             print(f"📋 Full traceback:")
             print(traceback.format_exc())
@@ -1174,7 +1178,6 @@ class TileAndStitchBack:
             return tile.clone()
         
         # Generate deterministic but varied color shifts based on tile indices
-        import random
         random.seed(temporal_idx * 1000 + h_idx * 100 + w_idx)
         
         # Random RGB shifts
@@ -1188,10 +1191,14 @@ class TileAndStitchBack:
             transformed[:, :, :, 0] = torch.clamp(transformed[:, :, :, 0] + r_shift, 0, 1)
             transformed[:, :, :, 1] = torch.clamp(transformed[:, :, :, 1] + g_shift, 0, 1)
             transformed[:, :, :, 2] = torch.clamp(transformed[:, :, :, 2] + b_shift, 0, 1)
+            
+            # Debug output to confirm color shift is being applied
+            if strength > 0:
+                print(f"      🎨 Color shift applied: R{r_shift:+.3f}, G{g_shift:+.3f}, B{b_shift:+.3f}")
         
         return transformed
     
-    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end):
+    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end, color_shift_strength=0.0):
         """Place tile into target tensor, handling overlaps with spatial fade blending"""
         tile_h, tile_w = tile.shape[1:3]
         
@@ -1200,14 +1207,16 @@ class TileAndStitchBack:
         
         # Check if there's existing content (non-zero) in the target area
         if target_region.sum() > 0:
-            # Create spatial fade mask for smooth blending
+            # Always use production-quality fade blending regardless of color shift strength
+            # Color shift is purely for visual debugging and shouldn't affect blending quality
             fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
             
             # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
             blended = target_region * (1.0 - fade_mask) + tile * fade_mask
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = blended
         else:
-            # First tile in this area, just place it
+            # First tile in this area or non-overlapping area - always place the tile
+            # (this includes color-shifted tiles when debugging is enabled)
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
     
     def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
