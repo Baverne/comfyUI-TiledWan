@@ -152,6 +152,61 @@ A comprehensive pipeline node that chains multiple WanVideo operations into a si
 - **Maximum Flexibility**: Use external nodes to configure advanced features exactly as needed
 
 **Usage Tip**: For maximum control, use separate WanVideoTeaCache, WanVideoSLG, and WanVideoExperimentalArgs nodes and connect their outputs to this pipeline node's `cache_args`, `slg_args`, and `experimental_args` inputs.
+
+---
+
+## TileAndStitchBack
+
+**Tile and Stitch Back** - A proof-of-concept node that demonstrates the tiling system optimized for WanVideo's best performance characteristics (81 frames, 832×480 resolution). This node tiles a video both temporally and spatially, applies color transformations for debugging, then stitches everything back together.
+
+**Pipeline Flow:**
+1. **Temporal Tiling** → Split video into 81-frame chunks with 10-frame overlap
+2. **Spatial Tiling** → Split each chunk into 832×480 tiles with 20-pixel overlap  
+3. **Color Transformation** → Apply random color shifts to each tile (for debugging)
+4. **Stitching** → Reconstruct the original video from processed tiles
+
+**Required Inputs:**
+- `video`: IMAGE - Input video sequence to tile and process
+
+**Tiling Parameters:**
+- `target_frames`: INT - Target frames per temporal chunk (default: 81, optimized for WanVideo)
+- `target_width`: INT - Target width per spatial tile (default: 832, optimized for WanVideo)  
+- `target_height`: INT - Target height per spatial tile (default: 480, optimized for WanVideo)
+- `frame_overlap`: INT - Overlap between temporal chunks in frames (default: 10)
+- `spatial_overlap`: INT - Overlap between spatial tiles in pixels (default: 20)
+
+**Debug Parameters:**
+- `color_shift_strength`: FLOAT - Strength of random color shifts applied to tiles (default: 0.1)
+- `debug_mode`: BOOLEAN - Enable detailed logging during processing (default: True)
+
+**Outputs:**
+- `stitched_video`: IMAGE - Reconstructed video after tiling and stitching
+- `tile_info`: STRING - Detailed information about the tiling process
+
+**Key Features:**
+- **WanVideo Optimized**: Default settings match WanVideo's optimal input format
+- **Smart Overlap Handling**: Automatically handles edge cases where dimensions aren't perfectly divisible
+- **Temporal & Spatial Tiling**: Complete tiling system for both time and space dimensions
+- **Debug Color Shifts**: Applies deterministic color transformations to verify tiling accuracy
+- **Overlap Blending**: Averages overlapping regions during stitching for smooth reconstruction
+- **Detailed Logging**: Comprehensive tile information for debugging and verification
+
+**Edge Case Handling:**
+- If input has 100 frames with 81-frame target: First chunk = frames 0-80, Second chunk = frames 19-99 (exactly 81 frames each)
+- If input dimensions aren't perfectly divisible: Creates additional full-size tiles that may overlap significantly
+- Example: 1920×1080 video with 832×480 tiles creates overlapping tiles to ensure each tile is exactly 832×480
+- Overlapping regions are blended by averaging pixel values during stitching
+
+**Tiling Strategy:**
+- **Exact Size Guarantee**: Each tile is exactly the target size (81 frames, 832×480 pixels)
+- **Full Coverage**: Additional tiles are added to cover all remaining content, even if heavily overlapping  
+- **WanVideo Optimized**: Every tile maintains the exact dimensions WanVideo expects for best performance
+
+**Usage Notes:**
+- This is a proof-of-concept for the tiling system that will be used in production WanVideo workflows
+- Color shifts help verify that tiling and stitching are working correctly
+- Set `color_shift_strength` to 0.0 to disable color transformations
+- The node is designed to prepare videos for optimal WanVideo processing
 - **Memory Efficient**: VAE tiling options for high-resolution generation
 - **Progress Tracking**: Detailed console output showing pipeline progress
 - **Error Handling**: Graceful fallback with dummy outputs if errors occur

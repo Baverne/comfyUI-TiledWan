@@ -629,6 +629,8 @@ class TiledWanVideoSLGSimple:
             # Import the WanVideoSLG
             import sys
             import os
+            import importlib
+            import traceback
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             print(f"🔍 Looking for WanVideo nodes in: {custom_nodes_path}")
             
@@ -801,6 +803,7 @@ class WanVideoVACEpipe:
             import sys
             import os
             import importlib
+            import traceback
             
             custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
             if custom_nodes_path not in sys.path:
@@ -950,6 +953,321 @@ class WanVideoVACEpipe:
             return (dummy_video, dummy_latent)
 
 
+class TileAndStitchBack:
+    """
+    Tile and Stitch Back node for WanVideo preprocessing/postprocessing.
+    
+    This node demonstrates the tiling system that will be used with WanVideo:
+    1. Temporal tiling: Split video into 81-frame chunks (10-frame overlap)
+    2. Spatial tiling: Split each chunk into 832×480 tiles (20-pixel overlap)
+    3. Color transformation: Apply random color shift to each tile (for debugging)
+    4. Stitch back: Reconstruct the original video from processed tiles
+    
+    This is optimized for WanVideo's best performance on 81-frame, 832×480 videos.
+    """
+    
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        """
+        Tile and Stitch Back inputs
+        """
+        return {
+            "required": {
+                "video": ("IMAGE",),
+                "target_frames": ("INT", {"default": 81, "min": 16, "max": 200, "step": 1}),
+                "target_width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8}),
+                "target_height": ("INT", {"default": 480, "min": 64, "max": 2048, "step": 8}),
+                "frame_overlap": ("INT", {"default": 10, "min": 0, "max": 40, "step": 1}),
+                "spatial_overlap": ("INT", {"default": 20, "min": 0, "max": 100, "step": 4}),
+                "color_shift_strength": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "debug_mode": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("stitched_video", "tile_info")
+    FUNCTION = "tile_and_stitch"
+    OUTPUT_NODE = True
+    CATEGORY = "TiledWan"
+
+    def tile_and_stitch(self, video, target_frames, target_width, target_height, 
+                       frame_overlap, spatial_overlap, color_shift_strength, debug_mode):
+        """
+        Tile video temporally and spatially, apply color transformation, then stitch back
+        """
+        
+        print("\n" + "="*80)
+        print("                  TILE AND STITCH BACK")
+        print("="*80)
+        print("🧩 Starting video tiling and stitching process...")
+        
+        try:
+            import random
+            import traceback
+            
+            # Input video info
+            batch_size, height, width, channels = video.shape
+            print(f"📹 Input video shape: {video.shape} (B×H×W×C)")
+            print(f"🎯 Target tile size: {target_frames} frames × {target_width}×{target_height}")
+            print(f"🔗 Overlaps: {frame_overlap} frames, {spatial_overlap} pixels")
+            
+            # Calculate temporal tiles
+            temporal_tiles = self._calculate_temporal_tiles(batch_size, target_frames, frame_overlap)
+            print(f"⏱️  Temporal tiles: {len(temporal_tiles)} chunks")
+            for i, (start, end) in enumerate(temporal_tiles):
+                print(f"   Chunk {i+1}: frames {start}-{end-1} ({end-start} frames)")
+            
+            # Calculate spatial tiles for each frame dimension
+            spatial_tiles_h = self._calculate_spatial_tiles(height, target_height, spatial_overlap)
+            spatial_tiles_w = self._calculate_spatial_tiles(width, target_width, spatial_overlap)
+            print(f"🗺️  Spatial tiles: {len(spatial_tiles_h)}×{len(spatial_tiles_w)} = {len(spatial_tiles_h) * len(spatial_tiles_w)} tiles per frame")
+            
+            total_tiles = len(temporal_tiles) * len(spatial_tiles_h) * len(spatial_tiles_w)
+            print(f"📦 Total tiles to process: {total_tiles}")
+            
+            # Process each temporal chunk
+            processed_chunks = []
+            tile_info_list = []
+            
+            for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
+                print(f"\n🎬 Processing temporal chunk {temporal_idx + 1}/{len(temporal_tiles)} (frames {t_start}-{t_end-1})")
+                
+                # Extract temporal chunk
+                chunk = video[t_start:t_end]
+                chunk_processed = torch.zeros_like(chunk)
+                
+                # Process each spatial tile within this temporal chunk
+                for h_idx, (h_start, h_end) in enumerate(spatial_tiles_h):
+                    for w_idx, (w_start, w_end) in enumerate(spatial_tiles_w):
+                        tile_idx = h_idx * len(spatial_tiles_w) + w_idx
+                        
+                        if debug_mode:
+                            print(f"   🧩 Tile {tile_idx + 1}/{len(spatial_tiles_h) * len(spatial_tiles_w)}: "
+                                  f"H[{h_start}:{h_end}] × W[{w_start}:{w_end}]")
+                        
+                        # Extract spatial tile
+                        tile = chunk[:, h_start:h_end, w_start:w_end, :]
+                        
+                        # Apply color transformation (for debugging)
+                        tile_transformed = self._apply_color_shift(tile, color_shift_strength, 
+                                                                 temporal_idx, h_idx, w_idx)
+                        
+                        # Place tile back (handle overlaps by averaging)
+                        self._place_tile_with_overlap(chunk_processed, tile_transformed, 
+                                                    h_start, h_end, w_start, w_end)
+                        
+                        # Record tile info
+                        tile_info = {
+                            'temporal_chunk': temporal_idx,
+                            'spatial_tile': (h_idx, w_idx),
+                            'temporal_range': (t_start, t_end),
+                            'spatial_range': ((h_start, h_end), (w_start, w_end)),
+                            'tile_shape': tile.shape
+                        }
+                        tile_info_list.append(tile_info)
+                
+                processed_chunks.append(chunk_processed)
+                print(f"✅ Temporal chunk {temporal_idx + 1} processed")
+            
+            # Stitch temporal chunks back together
+            print(f"\n🔗 Stitching {len(processed_chunks)} temporal chunks back together...")
+            stitched_video = self._stitch_temporal_chunks(processed_chunks, temporal_tiles, 
+                                                        batch_size, height, width, channels, frame_overlap)
+            
+            # Generate tile info summary
+            tile_info_summary = self._generate_tile_info_summary(tile_info_list, temporal_tiles, 
+                                                               spatial_tiles_h, spatial_tiles_w)
+            
+            print(f"✅ Tiling and stitching completed!")
+            print(f"📤 Output video shape: {stitched_video.shape}")
+            print(f"🧩 Total tiles processed: {len(tile_info_list)}")
+            print(f"📊 Tile info summary: {len(tile_info_summary)} characters")
+            print("="*80 + "\n")
+            
+            return (stitched_video, tile_info_summary)
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Error in tile and stitch: {str(e)}")
+            print(f"📋 Full traceback:")
+            print(traceback.format_exc())
+            print("="*80 + "\n")
+            
+            # Return original video in case of error
+            dummy_info = f"Error during tiling: {str(e)}"
+            return (video, dummy_info)
+    
+    def _calculate_temporal_tiles(self, total_frames, target_frames, overlap):
+        """Calculate temporal tile ranges with overlap handling"""
+        tiles = []
+        
+        if total_frames <= target_frames:
+            # If video is shorter than target, use the whole video
+            tiles.append((0, total_frames))
+        else:
+            stride = target_frames - overlap
+            current = 0
+            
+            while current < total_frames:
+                end = min(current + target_frames, total_frames)
+                
+                # If this would be the last tile and it doesn't cover remaining frames
+                remaining = total_frames - end
+                if remaining > 0:
+                    # Add this tile normally
+                    tiles.append((current, end))
+                    # Check if we need another tile to cover the remaining frames
+                    if remaining < stride:
+                        # Add a final tile that is exactly target_frames but starts from the end
+                        final_start = total_frames - target_frames
+                        tiles.append((final_start, total_frames))
+                        break
+                else:
+                    # This tile reaches exactly to the end
+                    tiles.append((current, end))
+                    break
+                    
+                current += stride
+        
+        return tiles
+    
+    def _calculate_spatial_tiles(self, total_size, target_size, overlap):
+        """Calculate spatial tile ranges with overlap handling"""
+        tiles = []
+        
+        if total_size <= target_size:
+            # If dimension is smaller than target, use the whole dimension
+            tiles.append((0, total_size))
+        else:
+            stride = target_size - overlap
+            current = 0
+            
+            while current < total_size:
+                end = min(current + target_size, total_size)
+                
+                # If this would be the last tile and it doesn't cover remaining pixels
+                remaining = total_size - end
+                if remaining > 0:
+                    # Add this tile normally
+                    tiles.append((current, end))
+                    # Check if we need another tile to cover the remaining pixels
+                    if remaining < stride:
+                        # Add a final tile that is exactly target_size but starts from the end
+                        final_start = total_size - target_size
+                        tiles.append((final_start, total_size))
+                        break
+                else:
+                    # This tile reaches exactly to the end
+                    tiles.append((current, end))
+                    break
+                    
+                current += stride
+        
+        return tiles
+    
+    def _apply_color_shift(self, tile, strength, temporal_idx, h_idx, w_idx):
+        """Apply color transformation to a tile for debugging purposes"""
+        if strength <= 0:
+            return tile.clone()
+        
+        # Generate deterministic but varied color shifts based on tile indices
+        import random
+        random.seed(temporal_idx * 1000 + h_idx * 100 + w_idx)
+        
+        # Random RGB shifts
+        r_shift = (random.random() - 0.5) * 2 * strength
+        g_shift = (random.random() - 0.5) * 2 * strength  
+        b_shift = (random.random() - 0.5) * 2 * strength
+        
+        transformed = tile.clone()
+        
+        if tile.shape[-1] >= 3:  # RGB channels
+            transformed[:, :, :, 0] = torch.clamp(transformed[:, :, :, 0] + r_shift, 0, 1)
+            transformed[:, :, :, 1] = torch.clamp(transformed[:, :, :, 1] + g_shift, 0, 1)
+            transformed[:, :, :, 2] = torch.clamp(transformed[:, :, :, 2] + b_shift, 0, 1)
+        
+        return transformed
+    
+    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end):
+        """Place tile into target tensor, handling overlaps by averaging"""
+        tile_h, tile_w = tile.shape[1:3]
+        
+        # Simple placement - for overlapping regions, we'll average
+        # In a more sophisticated implementation, you might use feathering/blending
+        existing = target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :]
+        
+        # Check if there's existing content (non-zero) in the target area
+        if existing.sum() > 0:
+            # Average with existing content in overlap regions
+            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = (existing + tile) * 0.5
+        else:
+            # First tile in this area, just place it
+            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
+    
+    def _stitch_temporal_chunks(self, chunks, temporal_tiles, total_frames, height, width, channels, overlap):
+        """Stitch temporal chunks back together handling overlaps"""
+        result = torch.zeros((total_frames, height, width, channels), dtype=chunks[0].dtype, device=chunks[0].device)
+        
+        for i, ((t_start, t_end), chunk) in enumerate(zip(temporal_tiles, chunks)):
+            chunk_frames = chunk.shape[0]
+            
+            if i == 0:
+                # First chunk, place directly
+                result[t_start:t_start+chunk_frames] = chunk
+            else:
+                # Handle overlap with previous chunk
+                prev_end = temporal_tiles[i-1][1]
+                overlap_start = max(t_start, prev_end - overlap)
+                overlap_end = min(t_end, prev_end)
+                
+                if overlap_start < overlap_end:
+                    # There's an overlap, blend the frames
+                    overlap_frames = overlap_end - overlap_start
+                    chunk_overlap_start = overlap_start - t_start
+                    
+                    # Average the overlapping frames
+                    existing = result[overlap_start:overlap_end]
+                    new_frames = chunk[chunk_overlap_start:chunk_overlap_start+overlap_frames]
+                    result[overlap_start:overlap_end] = (existing + new_frames) * 0.5
+                    
+                    # Place non-overlapping frames
+                    if overlap_end < t_start + chunk_frames:
+                        non_overlap_start = overlap_end
+                        chunk_offset = non_overlap_start - t_start
+                        result[non_overlap_start:t_start+chunk_frames] = chunk[chunk_offset:]
+                else:
+                    # No overlap, place directly
+                    result[t_start:t_start+chunk_frames] = chunk
+        
+        return result
+    
+    def _generate_tile_info_summary(self, tile_info_list, temporal_tiles, spatial_tiles_h, spatial_tiles_w):
+        """Generate a summary of the tiling process"""
+        summary = f"=== TILE AND STITCH SUMMARY ===\n"
+        summary += f"Total tiles processed: {len(tile_info_list)}\n"
+        summary += f"Temporal chunks: {len(temporal_tiles)}\n"
+        summary += f"Spatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}\n\n"
+        
+        summary += "Temporal chunks:\n"
+        for i, (start, end) in enumerate(temporal_tiles):
+            summary += f"  Chunk {i+1}: frames {start}-{end-1} ({end-start} frames)\n"
+        
+        summary += f"\nSpatial tiles (Height):\n"
+        for i, (start, end) in enumerate(spatial_tiles_h):
+            summary += f"  Row {i+1}: pixels {start}-{end-1} ({end-start} pixels)\n"
+        
+        summary += f"\nSpatial tiles (Width):\n"
+        for i, (start, end) in enumerate(spatial_tiles_w):
+            summary += f"  Col {i+1}: pixels {start}-{end-1} ({end-start} pixels)\n"
+        
+        summary += f"\nProcessing completed successfully!"
+        
+        return summary
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
@@ -958,7 +1276,8 @@ NODE_CLASS_MAPPINGS = {
     "TiledWanMaskStatistics": MaskStatistics,
     "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple,
     "TiledWanVideoSLGSimple": TiledWanVideoSLGSimple,
-    "WanVideoVACEpipe": WanVideoVACEpipe
+    "WanVideoVACEpipe": WanVideoVACEpipe,
+    "TileAndStitchBack": TileAndStitchBack
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -968,5 +1287,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanMaskStatistics": "TiledWan Mask Statistics",
     "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple",
     "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple",
-    "WanVideoVACEpipe": "WanVideo VACE Pipeline"
+    "WanVideoVACEpipe": "WanVideo VACE Pipeline",
+    "TileAndStitchBack": "Tile and Stitch Back"
 }
