@@ -1251,13 +1251,13 @@ class TileAndStitchBack:
             # Fade from 0 at left to 1 after fade_w pixels
             for i in range(fade_w):
                 alpha = i / fade_w
-                mask[:, :, i, :] = torch.min(mask[:, :, i, :], alpha)
+                mask[:, :, i, :] = torch.minimum(mask[:, :, i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
         
         if has_right:
             # Fade from 1 before last fade_w pixels to 0 at right
             for i in range(fade_w):
                 alpha = 1.0 - (i / fade_w)
-                mask[:, :, tile_w - 1 - i, :] = torch.min(mask[:, :, tile_w - 1 - i, :], alpha)
+                mask[:, :, tile_w - 1 - i, :] = torch.minimum(mask[:, :, tile_w - 1 - i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
         
         # Broadcast mask to match tile dimensions
         return mask.expand_as(new_tile)
