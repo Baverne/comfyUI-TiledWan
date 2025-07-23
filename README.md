@@ -97,7 +97,19 @@ A comprehensive pipeline node that chains multiple WanVideo operations into a si
 - `teacache_rel_l1_thresh`: FLOAT - TeaCache threshold for caching decisions (default: 0.3)
 - `teacache_start_step`: INT - Step to start applying TeaCache (default: 1)
 - `teacache_end_step`: INT - Step to end applying TeaCache (default: -1)
-- `teacache_use_coefficients`: BOOLEAN - Use calculated coefficients for accuracy (default: True)
+## WanVideoVACEpipe
+
+**WanVideo VACE Pipeline** - A streamlined complete video generation pipeline that combines the core WanVideo nodes (VACEEncode → Sampler → Decode) in a single modular node. External arguments for TeaCache, SLG, and Experimental features are provided for maximum flexibility.
+
+**Pipeline Flow:**
+1. **VACE Encoding** → Converts input parameters to image embeddings
+2. **WanVideo Sampling** → Generates video latents using all advanced features
+3. **VAE Decoding** → Converts latents to final video output
+
+**Required Inputs:**
+- `model`: WANVIDEOMODEL - The WanVideo model
+- `vae`: WANVAE - VAE model for encoding/decoding
+- Standard sampler parameters: `steps`, `cfg`, `shift`, `seed`, `scheduler`
 
 **VACE Encode Parameters:**
 - `vace_width`: INT - Video width in pixels (default: 832)
@@ -107,27 +119,17 @@ A comprehensive pipeline node that chains multiple WanVideo operations into a si
 - `vace_start_percent`: FLOAT - Start percentage for VACE application (default: 0.0)
 - `vace_end_percent`: FLOAT - End percentage for VACE application (default: 1.0)
 
-**SLG Parameters:**
-- `slg_blocks`: STRING - Transformer blocks to skip unconditioned guidance on (default: "10")
-- `slg_start_percent`: FLOAT - Start percentage for SLG application (default: 0.1)
-- `slg_end_percent`: FLOAT - End percentage for SLG application (default: 1.0)
-
-**Experimental Parameters:**
-- `exp_video_attention_split_steps`: STRING - Steps to split video attention for multiple prompts
-- `exp_cfg_zero_star`: BOOLEAN - Enable CFG Zero Star optimization (default: False)
-- `exp_use_zero_init`: BOOLEAN - Use zero initialization (default: False)
-- `exp_zero_star_steps`: INT - Number of zero star steps (default: 0)
-- `exp_use_fresca`: BOOLEAN - Enable FreSca frequency scaling (default: False)
-- `exp_fresca_scale_low`: FLOAT - FreSca low frequency scale (default: 1.0)
-- `exp_fresca_scale_high`: FLOAT - FreSca high frequency scale (default: 1.25)
-- `exp_fresca_freq_cutoff`: INT - FreSca frequency cutoff (default: 20)
-
 **Decode Parameters:**
 - `decode_enable_vae_tiling`: BOOLEAN - Enable VAE tiling for memory efficiency (default: False)
 - `decode_tile_x`: INT - VAE tile width in pixels (default: 272)
 - `decode_tile_y`: INT - VAE tile height in pixels (default: 272)
 - `decode_tile_stride_x`: INT - VAE tile stride X (default: 144)
 - `decode_tile_stride_y`: INT - VAE tile stride Y (default: 128)
+
+**External Arguments (Optional):**
+- `cache_args`: CACHEARGS - Pre-built TeaCache arguments from WanVideoTeaCache node
+- `slg_args`: SLGARGS - Pre-built SLG arguments from WanVideoSLG node  
+- `experimental_args`: EXPERIMENTALARGS - Pre-built experimental arguments from WanVideoExperimentalArgs node
 
 **Optional Inputs:**
 - `text_embeds`: WANVIDEOTEXTEMBEDS - Text embeddings for guided generation
@@ -142,12 +144,14 @@ A comprehensive pipeline node that chains multiple WanVideo operations into a si
 - `video`: IMAGE - Generated video frames as image sequence
 - `latents`: LATENT - The generated latent representation
 
-**Features:**
-- **Complete Pipeline**: Integrates the entire WanVideo generation stack in one node
-- **TeaCache Optimization**: Automatic caching for faster inference
-- **VACE Encoding**: Advanced video-aware conditional encoding
-- **SLG Guidance**: Selective layer guidance for improved quality
-- **Experimental Features**: Access to cutting-edge techniques like FreSca and CFG Zero Star
+**Key Benefits:**
+- **Modular Design**: Connect external WanVideoTeaCache, WanVideoSLG, and WanVideoExperimentalArgs nodes
+- **Complete Pipeline**: Handles VACE encode → sampling → decode in one node
+- **Memory Efficient**: Supports VAE tiling for large videos
+- **Production Ready**: Comprehensive error handling and detailed logging
+- **Maximum Flexibility**: Use external nodes to configure advanced features exactly as needed
+
+**Usage Tip**: For maximum control, use separate WanVideoTeaCache, WanVideoSLG, and WanVideoExperimentalArgs nodes and connect their outputs to this pipeline node's `cache_args`, `slg_args`, and `experimental_args` inputs.
 - **Memory Efficient**: VAE tiling options for high-resolution generation
 - **Progress Tracking**: Detailed console output showing pipeline progress
 - **Error Handling**: Graceful fallback with dummy outputs if errors occur

@@ -696,15 +696,13 @@ class TiledWanVideoSLGSimple:
 
 class WanVideoVACEpipe:
     """
-    Complete WanVideo pipeline that encapsulates multiple WanVideo nodes:
-    - WanVideoTeaCache -> cache_args
+    Complete WanVideo pipeline that encapsulates WanVideo nodes:
     - WanVideoVACEEncode -> image_embeds  
-    - WanVideoExperimentalArgs -> experimental_args
     - WanVideoSampler (original, not TiledWan wrapper)
     - WanVideoDecode -> final video output
     
-    This node provides a complete video generation pipeline in a single node
-    with full access to all parameters except internal connections.
+    This node provides a complete video generation pipeline in a single node.
+    TeaCache, SLG, and Experimental arguments are provided externally for better modularity.
     """
     
     def __init__(self):
@@ -713,7 +711,7 @@ class WanVideoVACEpipe:
     @classmethod
     def INPUT_TYPES(cls):
         """
-        Complete pipeline inputs combining all WanVideo nodes
+        Streamlined pipeline inputs with external args for TeaCache, SLG, and Experimental features
         """
         return {
             "required": {
@@ -737,34 +735,12 @@ class WanVideoVACEpipe:
                 "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 
-                # WanVideoTeaCache inputs
-                "teacache_rel_l1_thresh": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "teacache_start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1}),
-                "teacache_end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1}),
-                "teacache_use_coefficients": ("BOOLEAN", {"default": True}),
-                "teacache_cache_device": (["main_device", "offload_device"], {"default": "offload_device"}),
-                "teacache_mode": (["e", "e0"], {"default": "e"}),
-                
-                # WanVideoExperimentalArgs inputs
-                "exp_video_attention_split_steps": ("STRING", {"default": ""}),
-                "exp_cfg_zero_star": ("BOOLEAN", {"default": False}),
-                "exp_use_zero_init": ("BOOLEAN", {"default": False}),
-                "exp_zero_star_steps": ("INT", {"default": 0, "min": 0}),
-                "exp_use_fresca": ("BOOLEAN", {"default": False}),
-                "exp_fresca_scale_low": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
-                "exp_fresca_scale_high": ("FLOAT", {"default": 1.25, "min": 0.0, "max": 10.0, "step": 0.01}),
-                "exp_fresca_freq_cutoff": ("INT", {"default": 20, "min": 0, "max": 10000, "step": 1}),
-                
                 # WanVideoDecode inputs
                 "decode_enable_vae_tiling": ("BOOLEAN", {"default": False}),
                 "decode_tile_x": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
                 "decode_tile_y": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
                 "decode_tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2040, "step": 8}),
                 "decode_tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8}),
-                
-                # Enable/disable pipeline components
-                "enable_teacache": ("BOOLEAN", {"default": True}),
-                "enable_experimental": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 # WanVideoSampler optional inputs
@@ -787,8 +763,10 @@ class WanVideoVACEpipe:
                 "multitalk_embeds": ("MULTITALK_EMBEDS",),
                 "freeinit_args": ("FREEINIT_ARGS",),
                 
-                # External pre-built arguments (override internal ones if provided)
-                "external_slg_args": ("SLGARGS",),
+                # External pre-built arguments (for modularity)
+                "cache_args": ("CACHEARGS",),
+                "slg_args": ("SLGARGS",),
+                "experimental_args": ("EXPERIMENTALARGS",),
                 
                 # WanVideoVACEEncode optional inputs
                 "vace_input_frames": ("IMAGE",),
@@ -809,17 +787,17 @@ class WanVideoVACEpipe:
 
     def process_wanvideo_pipeline(self, **kwargs):
         """
-        Execute the complete WanVideo pipeline by chaining all nodes
+        Execute the streamlined WanVideo pipeline using external arguments
         """
         
         print("\n" + "="*80)
         print("                    WANVIDEO VACE PIPELINE")
         print("="*80)
-        print("🚀 Starting complete WanVideo VACE pipeline...")
+        print("🚀 Starting streamlined WanVideo VACE pipeline...")
         print(f"📊 Total parameters received: {len(kwargs)}")
         
         try:
-            # Import all WanVideo nodes we need
+            # Import WanVideo nodes we need
             import sys
             import os
             import importlib
@@ -841,58 +819,22 @@ class WanVideoVACEpipe:
             wanvideo_package = importlib.import_module(f"{package_name}.nodes")
             
             WanVideoSampler = wanvideo_package.WanVideoSampler
-            WanVideoTeaCache = wanvideo_package.WanVideoTeaCache
             WanVideoVACEEncode = wanvideo_package.WanVideoVACEEncode
-            WanVideoExperimentalArgs = wanvideo_package.WanVideoExperimentalArgs
             WanVideoDecode = wanvideo_package.WanVideoDecode
-            print("✅ All WanVideo nodes imported successfully!")
+            print("✅ Required WanVideo nodes imported successfully!")
             
-            # Step 1: Create TeaCache arguments (if enabled)
-            cache_args = None
-            if kwargs.get("enable_teacache", True):
-                print("📦 Step 1: Building TeaCache arguments...")
-                cache_device = kwargs.get("teacache_cache_device", "offload_device")
-                if cache_device == "main_device":
-                    import comfy.model_management as mm
-                    cache_device = mm.get_torch_device()
-                else:
-                    import comfy.model_management as mm
-                    cache_device = mm.unet_offload_device()
-                
-                cache_args = {
-                    "cache_type": "TeaCache",
-                    "rel_l1_thresh": kwargs.get("teacache_rel_l1_thresh", 0.3),
-                    "start_step": kwargs.get("teacache_start_step", 1),
-                    "end_step": kwargs.get("teacache_end_step", -1),
-                    "cache_device": cache_device,
-                    "use_coefficients": kwargs.get("teacache_use_coefficients", True),
-                    "mode": kwargs.get("teacache_mode", "e"),
-                }
-                print(f"✅ TeaCache args: {cache_args}")
-            else:
-                print("⏭️  Step 1: TeaCache disabled, skipping...")
+            # Get external arguments directly from inputs
+            cache_args = kwargs.get("cache_args")
+            slg_args = kwargs.get("slg_args")
+            experimental_args = kwargs.get("experimental_args")
             
-            # Step 2: Create Experimental arguments (if enabled)
-            experimental_args = None
-            if kwargs.get("enable_experimental", False):
-                print("📦 Step 2: Building Experimental arguments...")
-                exp_node = WanVideoExperimentalArgs()
-                experimental_args = exp_node.process(
-                    video_attention_split_steps=kwargs.get("exp_video_attention_split_steps", ""),
-                    cfg_zero_star=kwargs.get("exp_cfg_zero_star", False),
-                    use_zero_init=kwargs.get("exp_use_zero_init", False),
-                    zero_star_steps=kwargs.get("exp_zero_star_steps", 0),
-                    use_fresca=kwargs.get("exp_use_fresca", False),
-                    fresca_scale_low=kwargs.get("exp_fresca_scale_low", 1.0),
-                    fresca_scale_high=kwargs.get("exp_fresca_scale_high", 1.25),
-                    fresca_freq_cutoff=kwargs.get("exp_fresca_freq_cutoff", 20)
-                )[0]
-                print(f"✅ Experimental args: {experimental_args}")
-            else:
-                print("⏭️  Step 2: Experimental features disabled, skipping...")
+            print(f"📦 External arguments provided:")
+            print(f"   • TeaCache args: {'Yes' if cache_args else 'No'}")
+            print(f"   • SLG args: {'Yes' if slg_args else 'No'}")
+            print(f"   • Experimental args: {'Yes' if experimental_args else 'No'}")
             
-            # Step 3: Create VACE embeds
-            print("📦 Step 3: Creating VACE embeds...")
+            # Step 1: Create VACE embeds
+            print("📦 Step 1: Creating VACE embeds...")
             vace_node = WanVideoVACEEncode()
             vace_embeds = vace_node.process(
                 vae=kwargs["vae"],
@@ -909,8 +851,8 @@ class WanVideoVACEpipe:
             )[0]
             print(f"✅ VACE embeds created: {type(vace_embeds)}")
             
-            # Step 4: Run WanVideoSampler (original node, not our wrapper)
-            print("🎯 Step 4: Running WanVideoSampler...")
+            # Step 2: Run WanVideoSampler
+            print("🎯 Step 2: Running WanVideoSampler...")
             print(f"   • Model: {type(kwargs['model'])}")
             print(f"   • VACE embeds: {type(vace_embeds)}")
             print(f"   • Steps: {kwargs.get('steps', 30)}")
@@ -919,9 +861,9 @@ class WanVideoVACEpipe:
             print(f"   • Seed: {kwargs.get('seed', 0)}")
             print(f"   • Scheduler: {kwargs.get('scheduler', 'unipc')}")
             print(f"   • Rope function: {kwargs.get('rope_function', 'comfy')}")
-            print(f"   • TeaCache enabled: {'Yes' if cache_args else 'No'}")
-            print(f"   • Experimental enabled: {'Yes' if experimental_args else 'No'}")
-            print(f"   • External SLG args: {'Yes' if kwargs.get('external_slg_args') else 'No'}")
+            print(f"   • External TeaCache: {'Yes' if cache_args else 'No'}")
+            print(f"   • External SLG: {'Yes' if slg_args else 'No'}")
+            print(f"   • External Experimental: {'Yes' if experimental_args else 'No'}")
             
             sampler_node = WanVideoSampler()
             latent_samples = sampler_node.process(
@@ -938,10 +880,10 @@ class WanVideoVACEpipe:
                 denoise_strength=kwargs.get("denoise_strength", 1.0),
                 force_offload=kwargs.get("force_offload", True),
                 
-                # Pipeline connections
-                cache_args=cache_args,  # TeaCache args -> cache_args
-                slg_args=kwargs.get("external_slg_args"),  # SLG args -> slg_args
-                experimental_args=experimental_args,  # Experimental args -> experimental_args
+                # External arguments (much cleaner!)
+                cache_args=cache_args,
+                slg_args=slg_args,
+                experimental_args=experimental_args,
                 
                 # Other WanVideoSampler arguments
                 feta_args=kwargs.get("feta_args"),
@@ -963,8 +905,8 @@ class WanVideoVACEpipe:
             if hasattr(latent_samples, 'get') and 'samples' in latent_samples:
                 print(f"   • Latent shape: {latent_samples['samples'].shape}")
             
-            # Step 5: Decode latents to video
-            print("🎬 Step 5: Decoding latents to video...")
+            # Step 3: Decode latents to video
+            print("🎬 Step 3: Decoding latents to video...")
             print(f"   • VAE: {type(kwargs['vae'])}")
             print(f"   • Latents: {type(latent_samples)}")
             print(f"   • Enable VAE tiling: {kwargs.get('decode_enable_vae_tiling', False)}")
@@ -988,7 +930,8 @@ class WanVideoVACEpipe:
             if hasattr(video_output, 'shape'):
                 print(f"   • Video shape: {video_output.shape}")
             
-            print("🎉 Complete WanVideo VACE pipeline finished successfully!")
+            print("🎉 Streamlined WanVideo VACE pipeline finished successfully!")
+            print("   Pipeline used external TeaCache, SLG, and Experimental arguments for maximum modularity")
             print("="*80 + "\n")
             
             return (video_output, latent_samples)
