@@ -1339,6 +1339,575 @@ class TileAndStitchBack:
         return summary
 
 
+class TiledWanVideoVACEpipe:
+    """
+    Tiled WanVideo VACE Pipeline - The ultimate node for processing large videos.
+    
+    This node combines the sophisticated tiling system from TileAndStitchBack with 
+    the complete WanVideo VACE pipeline. It handles large videos by:
+    
+    1. Temporal tiling: Split video into 81-frame chunks (10-frame overlap)
+    2. Spatial tiling: Split each chunk into 832×480 tiles (20-pixel overlap) 
+    3. WanVideo processing: Process each tile through the complete VACE pipeline
+    4. Memory management: Properly offload models between tiles to prevent leaks
+    5. Sophisticated stitching: Reconstruct final video with fade blending
+    
+    This enables processing of arbitrarily large videos that would otherwise 
+    exceed memory limits, while maintaining WanVideo's optimal performance.
+    """
+    
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        """
+        Complete inputs combining tiling parameters with WanVideo VACE pipeline
+        """
+        return {
+            "required": {
+                # Input video and mask
+                "video": ("IMAGE",),
+                "mask": ("MASK",),
+                
+                # Core WanVideo pipeline inputs
+                "model": ("WANVIDEOMODEL",),
+                "vae": ("WANVAE",),
+                
+                # Tiling parameters
+                "target_frames": ("INT", {"default": 81, "min": 16, "max": 200, "step": 1}),
+                "target_width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8}),
+                "target_height": ("INT", {"default": 480, "min": 64, "max": 2048, "step": 8}),
+                "frame_overlap": ("INT", {"default": 10, "min": 0, "max": 40, "step": 1}),
+                "spatial_overlap": ("INT", {"default": 20, "min": 0, "max": 100, "step": 4}),
+                
+                # WanVideoSampler core parameters
+                "steps": ("INT", {"default": 30, "min": 1}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
+                    {"default": 'unipc'}),
+                
+                # WanVideoVACEEncode parameters  
+                "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
+                "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                
+                # WanVideoDecode parameters
+                "decode_enable_vae_tiling": ("BOOLEAN", {"default": False}),
+                "decode_tile_x": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
+                "decode_tile_y": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
+                "decode_tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2040, "step": 8}),
+                "decode_tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8}),
+                
+                # Processing parameters
+                "debug_mode": ("BOOLEAN", {"default": True}),
+                "force_offload_between_tiles": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                # WanVideoSampler optional inputs
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",),
+                "samples": ("LATENT",),
+                "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "force_offload": ("BOOLEAN", {"default": True}),
+                "batched_cfg": ("BOOLEAN", {"default": False}),
+                "rope_function": (["default", "comfy"], {"default": "comfy"}),
+                
+                # WanVideoSampler advanced optional inputs
+                "feta_args": ("FETAARGS",),
+                "context_options": ("CONTEXTOPTIONS",),
+                "loop_args": ("LOOPARGS",),
+                "sigmas": ("SIGMAS",),
+                "unianimate_poses": ("UNIANIMATE_POSES",),
+                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS",),
+                "uni3c_embeds": ("UNI3C_EMBEDS",),
+                "multitalk_embeds": ("MULTITALK_EMBEDS",),
+                "freeinit_args": ("FREEINIT_ARGS",),
+                
+                # External pre-built arguments (for modularity)
+                "cache_args": ("CACHEARGS",),
+                "slg_args": ("SLGARGS",),
+                "experimental_args": ("EXPERIMENTALARGS",),
+                
+                # WanVideoVACEEncode optional inputs  
+                "vace_ref_images": ("IMAGE",),
+                "vace_tiled_vae": ("BOOLEAN", {"default": False}),
+                
+                # WanVideoDecode optional inputs
+                "decode_normalization": (["default", "minmax"], {"default": "default"}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("processed_video", "processing_info")
+    FUNCTION = "process_tiled_wanvideo"
+    OUTPUT_NODE = True
+    CATEGORY = "TiledWan"
+
+    def process_tiled_wanvideo(self, video, mask, model, vae, target_frames, target_width, target_height, 
+                              frame_overlap, spatial_overlap, steps, cfg, shift, seed, scheduler,
+                              vace_strength, vace_start_percent, vace_end_percent, 
+                              decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
+                              decode_tile_stride_x, decode_tile_stride_y, debug_mode, 
+                              force_offload_between_tiles, **kwargs):
+        """
+        Process large video through tiled WanVideo VACE pipeline with memory management
+        """
+        
+        print("\n" + "="*80)
+        print("              TILED WANVIDEO VACE PIPELINE")
+        print("="*80)
+        print("🚀 Starting tiled WanVideo VACE processing...")
+        
+        try:
+            # Import WanVideo nodes
+            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
+            if custom_nodes_path not in sys.path:
+                sys.path.append(custom_nodes_path)
+            
+            parent_path = os.path.dirname(custom_nodes_path)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
+            
+            package_name = os.path.basename(custom_nodes_path)
+            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
+            
+            WanVideoSampler = wanvideo_package.WanVideoSampler
+            WanVideoVACEEncode = wanvideo_package.WanVideoVACEEncode
+            WanVideoDecode = wanvideo_package.WanVideoDecode
+            print("✅ WanVideo nodes imported successfully!")
+            
+            # Input validation
+            batch_size, height, width, channels = video.shape
+            mask_batch, mask_height, mask_width = mask.shape
+            
+            print(f"📹 Input video shape: {video.shape} (B×H×W×C)")
+            print(f"🎭 Input mask shape: {mask.shape} (B×H×W)")
+            print(f"🎯 Target tile size: {target_frames} frames × {target_width}×{target_height}")
+            print(f"🔗 Overlaps: {frame_overlap} frames, {spatial_overlap} pixels")
+            
+            # Validate mask dimensions
+            if mask_batch != batch_size or mask_height != height or mask_width != width:
+                print(f"⚠️  Warning: Mask dimensions {mask.shape} don't match video {video.shape}")
+                print("   Resizing mask to match video...")
+                # Resize mask to match video
+                mask = torch.nn.functional.interpolate(
+                    mask.unsqueeze(1), size=(height, width), mode='nearest'
+                ).squeeze(1)
+                print(f"✅ Mask resized to: {mask.shape}")
+            
+            # Calculate temporal and spatial tiles
+            temporal_tiles = self._calculate_temporal_tiles(batch_size, target_frames, frame_overlap)
+            spatial_tiles_h = self._calculate_spatial_tiles(height, target_height, spatial_overlap) 
+            spatial_tiles_w = self._calculate_spatial_tiles(width, target_width, spatial_overlap)
+            
+            total_tiles = len(temporal_tiles) * len(spatial_tiles_h) * len(spatial_tiles_w)
+            print(f"⏱️  Temporal chunks: {len(temporal_tiles)}")
+            print(f"🗺️  Spatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}")
+            print(f"📦 Total tiles to process: {total_tiles}")
+            
+            # Process each temporal chunk
+            processed_chunks = []
+            processing_info_list = []
+            
+            for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
+                print(f"\n🎬 Processing temporal chunk {temporal_idx + 1}/{len(temporal_tiles)} (frames {t_start}-{t_end-1})")
+                
+                # Extract temporal chunk for video and mask
+                video_chunk = video[t_start:t_end]
+                mask_chunk = mask[t_start:t_end]
+                chunk_processed = torch.zeros_like(video_chunk)
+                
+                # Process each spatial tile within this temporal chunk
+                for h_idx, (h_start, h_end) in enumerate(spatial_tiles_h):
+                    for w_idx, (w_start, w_end) in enumerate(spatial_tiles_w):
+                        tile_idx = h_idx * len(spatial_tiles_w) + w_idx
+                        
+                        if debug_mode:
+                            print(f"   🧩 Tile {tile_idx + 1}/{len(spatial_tiles_h) * len(spatial_tiles_w)}: "
+                                  f"H[{h_start}:{h_end}] × W[{w_start}:{w_end}]")
+                        
+                        # Extract spatial tiles (video and mask)
+                        video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
+                        mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
+                        
+                        # Process tile through WanVideo VACE pipeline
+                        try:
+                            processed_tile, tile_latents = self._process_tile_through_wanvideo(
+                                video_tile, mask_tile, model, vae, 
+                                WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                                steps, cfg, shift, seed + tile_idx,  # Unique seed per tile
+                                scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                                decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
+                                decode_tile_stride_x, decode_tile_stride_y, kwargs
+                            )
+                            
+                            # Place processed tile back with fade blending
+                            self._place_tile_with_overlap(chunk_processed, processed_tile,
+                                                        h_start, h_end, w_start, w_end)
+                            
+                            # Record processing info
+                            tile_info = {
+                                'temporal_chunk': temporal_idx,
+                                'spatial_tile': (h_idx, w_idx),
+                                'temporal_range': (t_start, t_end),
+                                'spatial_range': ((h_start, h_end), (w_start, w_end)),
+                                'input_shape': video_tile.shape,
+                                'output_shape': processed_tile.shape,
+                                'seed_used': seed + tile_idx,
+                                'status': 'success'
+                            }
+                            processing_info_list.append(tile_info)
+                            
+                            # Force memory cleanup between tiles if requested
+                            if force_offload_between_tiles:
+                                self._force_memory_cleanup(model, vae)
+                                
+                        except Exception as tile_error:
+                            print(f"      ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
+                            # Use original tile as fallback
+                            self._place_tile_with_overlap(chunk_processed, video_tile,
+                                                        h_start, h_end, w_start, w_end)
+                            
+                            tile_info = {
+                                'temporal_chunk': temporal_idx,
+                                'spatial_tile': (h_idx, w_idx),
+                                'temporal_range': (t_start, t_end),
+                                'spatial_range': ((h_start, h_end), (w_start, w_end)),
+                                'input_shape': video_tile.shape,
+                                'output_shape': video_tile.shape,
+                                'seed_used': seed + tile_idx,
+                                'status': f'failed: {str(tile_error)}'
+                            }
+                            processing_info_list.append(tile_info)
+                
+                processed_chunks.append(chunk_processed)
+                print(f"✅ Temporal chunk {temporal_idx + 1} processed")
+            
+            # Stitch temporal chunks back together
+            print(f"\n🔗 Stitching {len(processed_chunks)} temporal chunks back together...")
+            final_video = self._stitch_temporal_chunks(processed_chunks, temporal_tiles,
+                                                     batch_size, height, width, channels, frame_overlap)
+            
+            # Generate comprehensive processing info
+            processing_summary = self._generate_processing_summary(processing_info_list, temporal_tiles,
+                                                                 spatial_tiles_h, spatial_tiles_w, total_tiles)
+            
+            print(f"✅ Tiled WanVideo VACE processing completed!")
+            print(f"📤 Output video shape: {final_video.shape}")
+            print(f"🧩 Total tiles processed: {len(processing_info_list)}")
+            successful_tiles = sum(1 for info in processing_info_list if info['status'] == 'success')
+            print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
+            print("="*80 + "\n")
+            
+            return (final_video, processing_summary)
+            
+        except Exception as e:
+            print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
+            print(f"📋 Full traceback:")
+            print(traceback.format_exc())
+            print("="*80 + "\n")
+            
+            # Return original video in case of error
+            error_info = f"Error during tiled WanVideo processing: {str(e)}"
+            return (video, error_info)
+    
+    def _process_tile_through_wanvideo(self, video_tile, mask_tile, model, vae,
+                                     WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                                     steps, cfg, shift, seed, scheduler, vace_strength,
+                                     vace_start_percent, vace_end_percent, decode_enable_vae_tiling,
+                                     decode_tile_x, decode_tile_y, decode_tile_stride_x, 
+                                     decode_tile_stride_y, kwargs):
+        """Process a single tile through the complete WanVideo VACE pipeline"""
+        
+        tile_frames, tile_height, tile_width = video_tile.shape[:3]
+        
+        # Step 1: Create VACE embeds for this tile
+        vace_node = WanVideoVACEEncode()
+        vace_embeds = vace_node.process(
+            vae=vae,
+            width=tile_width,
+            height=tile_height, 
+            num_frames=tile_frames,
+            strength=vace_strength,
+            vace_start_percent=vace_start_percent,
+            vace_end_percent=vace_end_percent,
+            input_frames=video_tile,  # Use tile as input frames
+            ref_images=kwargs.get("vace_ref_images"),
+            input_masks=mask_tile,    # Use tile mask
+            tiled_vae=kwargs.get("vace_tiled_vae", False)
+        )[0]
+        
+        # Step 2: Run WanVideoSampler on this tile
+        sampler_node = WanVideoSampler()
+        latent_samples = sampler_node.process(
+            model=model,
+            image_embeds=vace_embeds,
+            steps=steps,
+            cfg=cfg,
+            shift=shift,
+            seed=seed,
+            scheduler=scheduler,
+            riflex_freq_index=kwargs.get("riflex_freq_index", 0),
+            text_embeds=kwargs.get("text_embeds"),
+            samples=kwargs.get("samples"),
+            denoise_strength=kwargs.get("denoise_strength", 1.0),
+            force_offload=kwargs.get("force_offload", True),
+            
+            # External arguments
+            cache_args=kwargs.get("cache_args"),
+            slg_args=kwargs.get("slg_args"),
+            experimental_args=kwargs.get("experimental_args"),
+            
+            # Other arguments
+            feta_args=kwargs.get("feta_args"),
+            context_options=kwargs.get("context_options"),
+            flowedit_args=None,
+            batched_cfg=kwargs.get("batched_cfg", False),
+            rope_function=kwargs.get("rope_function", "comfy"),
+            loop_args=kwargs.get("loop_args"),
+            sigmas=kwargs.get("sigmas"),
+            unianimate_poses=kwargs.get("unianimate_poses"),
+            fantasytalking_embeds=kwargs.get("fantasytalking_embeds"),
+            uni3c_embeds=kwargs.get("uni3c_embeds"),
+            multitalk_embeds=kwargs.get("multitalk_embeds"),
+            freeinit_args=kwargs.get("freeinit_args")
+        )[0]
+        
+        # Step 3: Decode latents back to video for this tile
+        decode_node = WanVideoDecode()
+        processed_tile = decode_node.decode(
+            vae=vae,
+            samples=latent_samples,
+            enable_vae_tiling=decode_enable_vae_tiling,
+            tile_x=decode_tile_x,
+            tile_y=decode_tile_y,
+            tile_stride_x=decode_tile_stride_x,
+            tile_stride_y=decode_tile_stride_y,
+            normalization=kwargs.get("decode_normalization", "default")
+        )[0]
+        
+        return processed_tile, latent_samples
+    
+    def _force_memory_cleanup(self, model, vae):
+        """Force memory cleanup between tile processing"""
+        try:
+            import gc
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Clear CUDA cache if available
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # Try to offload models if they have offload methods
+            if hasattr(model, 'cpu_offload'):
+                model.cpu_offload()
+            elif hasattr(model, 'to'):
+                model.to('cpu')
+                
+            if hasattr(vae, 'cpu_offload'):
+                vae.cpu_offload()
+            elif hasattr(vae, 'to'):
+                vae.to('cpu')
+                
+        except Exception as cleanup_error:
+            print(f"      ⚠️  Warning: Memory cleanup failed: {str(cleanup_error)}")
+    
+    def _calculate_temporal_tiles(self, total_frames, target_frames, overlap):
+        """Calculate temporal tile ranges with overlap handling"""
+        tiles = []
+        
+        if total_frames <= target_frames:
+            tiles.append((0, total_frames))
+        else:
+            stride = target_frames - overlap
+            current = 0
+            
+            while current < total_frames:
+                end = min(current + target_frames, total_frames)
+                remaining = total_frames - end
+                
+                if remaining > 0:
+                    tiles.append((current, end))
+                    if remaining < stride:
+                        final_start = total_frames - target_frames
+                        tiles.append((final_start, total_frames))
+                        break
+                else:
+                    tiles.append((current, end))
+                    break
+                    
+                current += stride
+        
+        return tiles
+    
+    def _calculate_spatial_tiles(self, total_size, target_size, overlap):
+        """Calculate spatial tile ranges with overlap handling"""
+        tiles = []
+        
+        if total_size <= target_size:
+            tiles.append((0, total_size))
+        else:
+            stride = target_size - overlap
+            current = 0
+            
+            while current < total_size:
+                end = min(current + target_size, total_size)
+                remaining = total_size - end
+                
+                if remaining > 0:
+                    tiles.append((current, end))
+                    if remaining < stride:
+                        final_start = total_size - target_size
+                        tiles.append((final_start, total_size))
+                        break
+                else:
+                    tiles.append((current, end))
+                    break
+                    
+                current += stride
+        
+        return tiles
+    
+    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end):
+        """Place tile into target tensor, handling overlaps with spatial fade blending"""
+        tile_h, tile_w = tile.shape[1:3]
+        
+        # Get the target region
+        target_region = target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :]
+        
+        # Check if there's existing content (non-zero) in the target area
+        if target_region.sum() > 0:
+            # Use production-quality fade blending
+            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
+            
+            # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
+            blended = target_region * (1.0 - fade_mask) + tile * fade_mask
+            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = blended
+        else:
+            # First tile in this area - place directly
+            target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
+    
+    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
+        """Create a spatial fade mask for smooth blending between tiles"""
+        # Create base mask (1.0 = use new tile, 0.0 = use existing)
+        mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
+        
+        # Define fade distance
+        fade_h = min(10, tile_h // 4)
+        fade_w = min(10, tile_w // 4)
+        
+        # Check which edges have existing content
+        has_top = existing[:, :fade_h, :, :].sum() > 0
+        has_bottom = existing[:, -fade_h:, :, :].sum() > 0
+        has_left = existing[:, :, :fade_w, :].sum() > 0
+        has_right = existing[:, :, -fade_w:, :].sum() > 0
+        
+        # Create fade gradients for each edge
+        if has_top:
+            for i in range(fade_h):
+                alpha = i / fade_h
+                mask[:, i, :, :] = alpha
+        
+        if has_bottom:
+            for i in range(fade_h):
+                alpha = 1.0 - (i / fade_h)
+                mask[:, tile_h - 1 - i, :, :] = alpha
+        
+        if has_left:
+            for i in range(fade_w):
+                alpha = i / fade_w
+                mask[:, :, i, :] = torch.minimum(mask[:, :, i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
+        
+        if has_right:
+            for i in range(fade_w):
+                alpha = 1.0 - (i / fade_w)
+                mask[:, :, tile_w - 1 - i, :] = torch.minimum(mask[:, :, tile_w - 1 - i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
+        
+        return mask.expand_as(new_tile)
+    
+    def _stitch_temporal_chunks(self, chunks, temporal_tiles, total_frames, height, width, channels, overlap):
+        """Stitch temporal chunks back together with temporal fade blending"""
+        result = torch.zeros((total_frames, height, width, channels), dtype=chunks[0].dtype, device=chunks[0].device)
+        
+        for i, ((t_start, t_end), chunk) in enumerate(zip(temporal_tiles, chunks)):
+            chunk_frames = chunk.shape[0]
+            
+            if i == 0:
+                result[t_start:t_start+chunk_frames] = chunk
+            else:
+                prev_end = temporal_tiles[i-1][1]
+                overlap_start = max(t_start, prev_end - overlap)
+                overlap_end = min(t_end, prev_end)
+                
+                if overlap_start < overlap_end:
+                    overlap_frames = overlap_end - overlap_start
+                    chunk_overlap_start = overlap_start - t_start
+                    
+                    existing_frames = result[overlap_start:overlap_end]
+                    new_frames = chunk[chunk_overlap_start:chunk_overlap_start+overlap_frames]
+                    
+                    fade_mask = self._create_temporal_fade_mask(overlap_frames, existing_frames.dtype, existing_frames.device)
+                    
+                    blended_frames = existing_frames * (1.0 - fade_mask) + new_frames * fade_mask
+                    result[overlap_start:overlap_end] = blended_frames
+                    
+                    if overlap_end < t_start + chunk_frames:
+                        non_overlap_start = overlap_end
+                        chunk_offset = non_overlap_start - t_start
+                        result[non_overlap_start:t_start+chunk_frames] = chunk[chunk_offset:]
+                else:
+                    result[t_start:t_start+chunk_frames] = chunk
+        
+        return result
+    
+    def _create_temporal_fade_mask(self, overlap_frames, dtype, device):
+        """Create a temporal fade mask for smooth frame transitions"""
+        fade_values = torch.linspace(0.0, 1.0, overlap_frames, dtype=dtype, device=device)
+        fade_mask = fade_values.view(overlap_frames, 1, 1, 1)
+        return fade_mask
+    
+    def _generate_processing_summary(self, processing_info_list, temporal_tiles, spatial_tiles_h, spatial_tiles_w, total_tiles):
+        """Generate comprehensive summary of the tiled processing"""
+        successful_tiles = sum(1 for info in processing_info_list if info['status'] == 'success')
+        failed_tiles = total_tiles - successful_tiles
+        
+        summary = f"=== TILED WANVIDEO VACE PROCESSING SUMMARY ===\n"
+        summary += f"Total tiles processed: {total_tiles}\n"
+        summary += f"Successful tiles: {successful_tiles}\n"
+        summary += f"Failed tiles: {failed_tiles}\n"
+        summary += f"Success rate: {(successful_tiles/total_tiles)*100:.1f}%\n\n"
+        
+        summary += f"Temporal chunks: {len(temporal_tiles)}\n"
+        for i, (start, end) in enumerate(temporal_tiles):
+            summary += f"  Chunk {i+1}: frames {start}-{end-1} ({end-start} frames)\n"
+        
+        summary += f"\nSpatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}\n"
+        summary += f"Height tiles: {len(spatial_tiles_h)}\n"
+        for i, (start, end) in enumerate(spatial_tiles_h):
+            summary += f"  Row {i+1}: pixels {start}-{end-1} ({end-start} pixels)\n"
+        
+        summary += f"\nWidth tiles: {len(spatial_tiles_w)}\n"
+        for i, (start, end) in enumerate(spatial_tiles_w):
+            summary += f"  Col {i+1}: pixels {start}-{end-1} ({end-start} pixels)\n"
+        
+        if failed_tiles > 0:
+            summary += f"\nFailed tiles:\n"
+            for info in processing_info_list:
+                if info['status'] != 'success':
+                    summary += f"  Chunk {info['temporal_chunk']}, Tile {info['spatial_tile']}: {info['status']}\n"
+        
+        summary += f"\nTiled WanVideo VACE processing completed successfully!"
+        summary += f"\nLarge video processed through {total_tiles} individual WanVideo operations."
+        
+        return summary
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
@@ -1348,7 +1917,8 @@ NODE_CLASS_MAPPINGS = {
     "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple,
     "TiledWanVideoSLGSimple": TiledWanVideoSLGSimple,
     "WanVideoVACEpipe": WanVideoVACEpipe,
-    "TileAndStitchBack": TileAndStitchBack
+    "TileAndStitchBack": TileAndStitchBack,
+    "TiledWanVideoVACEpipe": TiledWanVideoVACEpipe
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -1359,5 +1929,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple",
     "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple",
     "WanVideoVACEpipe": "WanVideo VACE Pipeline",
-    "TileAndStitchBack": "Tile and Stitch Back"
+    "TileAndStitchBack": "Tile and Stitch Back",
+    "TiledWanVideoVACEpipe": "Tiled WanVideo VACE Pipeline"
 }
