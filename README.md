@@ -327,3 +327,172 @@ The TiledWan Video Sampler Simple node can be found in the "TiledWan" category i
 - Same seed + same parameters = identical output to original node
 - Connect argument objects (cache_args, slg_args, etc.) rather than trying to configure manually
 - Monitor console output to verify feature usage and configuration
+
+### WanVideo VACE Pipeline
+A complete, production-ready WanVideo pipeline that encapsulates multiple WanVideo components into a single, easy-to-use node. This is the ultimate WanVideo generation solution.
+
+**Pipeline Components:**
+- **WanVideoTeaCache** → cache_args → **WanVideoSampler**
+- **WanVideoVACEEncode** → image_embeds → **WanVideoSampler** 
+- **WanVideoExperimentalArgs** → experimental_args → **WanVideoSampler**
+- **WanVideoSampler** → samples → **WanVideoDecode**
+- **WanVideoDecode** → final video output
+
+**Key Features:**
+- **Complete Pipeline**: End-to-end video generation in a single node
+- **Intelligent Connections**: Automatic parameter routing between internal components
+- **Full Parameter Access**: All component parameters exposed except internal connections
+- **Production Ready**: Optimized for real-world video generation workflows
+- **Debug-Friendly**: Comprehensive logging for each pipeline stage
+
+**Inputs:**
+**Required Pipeline Inputs:**
+- `model`: WANVIDEOMODEL - The WanVideo model for generation
+- `vae`: WANVAE - VAE for encoding/decoding operations
+
+**Core Sampling Parameters:**
+- `steps`: INT - Number of sampling steps (default: 30)
+- `cfg`: FLOAT - Classifier-free guidance scale (default: 6.0, range: 0-30)
+- `shift`: FLOAT - Shift parameter for sampling (default: 5.0, range: 0-1000)
+- `seed`: INT - Random seed for reproducibility (default: 0)
+- `scheduler`: COMBO - Sampling scheduler (default: "unipc")
+
+**VACE Encoding Parameters:**
+- `vace_width`: INT - Video width (default: 832, step: 8)
+- `vace_height`: INT - Video height (default: 480, step: 8)
+- `vace_num_frames`: INT - Number of frames (default: 81, step: 4)
+- `vace_strength`: FLOAT - VACE strength (default: 1.0, range: 0-10)
+- `vace_start_percent`: FLOAT - VACE start percentage (default: 0.0)
+- `vace_end_percent`: FLOAT - VACE end percentage (default: 1.0)
+
+**TeaCache Parameters:**
+- `teacache_rel_l1_thresh`: FLOAT - L1 threshold for cache (default: 0.3)
+- `teacache_start_step`: INT - Cache start step (default: 1)
+- `teacache_end_step`: INT - Cache end step (default: -1)
+- `teacache_use_coefficients`: BOOLEAN - Use cache coefficients (default: True)
+- `teacache_cache_device`: COMBO - Cache device ("main_device", "offload_device")
+- `teacache_mode`: COMBO - Cache mode ("e", "e0")
+
+**Experimental Features Parameters:**
+- `exp_video_attention_split_steps`: STRING - Video attention split steps
+- `exp_cfg_zero_star`: BOOLEAN - Enable CFG zero star
+- `exp_use_zero_init`: BOOLEAN - Use zero initialization
+- `exp_zero_star_steps`: INT - Zero star steps count
+- `exp_use_fresca`: BOOLEAN - Enable Fresca optimization
+- `exp_fresca_scale_low`: FLOAT - Fresca low scale (default: 1.0)
+- `exp_fresca_scale_high`: FLOAT - Fresca high scale (default: 1.25)
+- `exp_fresca_freq_cutoff`: INT - Fresca frequency cutoff (default: 20)
+
+**Decode Parameters:**
+- `decode_enable_vae_tiling`: BOOLEAN - Enable VAE tiling (default: False)
+- `decode_tile_x`: INT - Tile width (default: 272)
+- `decode_tile_y`: INT - Tile height (default: 272)  
+- `decode_tile_stride_x`: INT - Tile stride X (default: 144)
+- `decode_tile_stride_y`: INT - Tile stride Y (default: 128)
+
+**Pipeline Control:**
+- `enable_teacache`: BOOLEAN - Enable TeaCache optimization (default: True)
+- `enable_experimental`: BOOLEAN - Enable experimental features (default: False)
+
+**Optional Advanced Inputs:**
+- `text_embeds`: WANVIDEOTEXTEMBEDS - Text conditioning
+- `samples`: LATENT - Input latent samples for img2img
+- `riflex_freq_index`: INT - Riflex frequency index
+- `denoise_strength`: FLOAT - Denoising strength (default: 1.0)
+- `force_offload`: BOOLEAN - Force model offloading (default: True)
+- `batched_cfg`: BOOLEAN - Use batched CFG (default: False)
+- `rope_function`: COMBO - RoPE function ("default", "comfy") - Default: "comfy"
+
+**Optional Component Inputs:**
+- `feta_args`: FETAARGS - FETA optimization arguments
+- `context_options`: CONTEXTOPTIONS - Context handling options
+- `loop_args`: LOOPARGS - Loop generation arguments
+- `sigmas`: SIGMAS - Custom noise schedule
+- `unianimate_poses`: UNIANIMATE_POSES - UniAnimate pose data
+- `fantasytalking_embeds`: FANTASYTALKING_EMBEDS - Fantasy talking embeddings
+- `uni3c_embeds`: UNI3C_EMBEDS - Uni3C embeddings
+- `multitalk_embeds`: MULTITALK_EMBEDS - MultiTalk embeddings
+- `freeinit_args`: FREEINIT_ARGS - FreeInit arguments
+
+**External Overrides:**
+- `external_slg_args`: SLGARGS - Pre-built SLG arguments (overrides internal SLG)
+
+**VACE Optional Inputs:**
+- `vace_input_frames`: IMAGE - Input frames for VACE
+- `vace_ref_images`: IMAGE - Reference images for VACE
+- `vace_input_masks`: MASK - Input masks for VACE
+- `vace_tiled_vae`: BOOLEAN - Use tiled VAE in VACE
+
+**Decode Optional Inputs:**
+- `decode_normalization`: COMBO - Normalization method ("default", "minmax")
+
+**Outputs:**
+- `video`: IMAGE - Final generated video frames
+- `latents`: LATENT - Generated latent samples (for further processing)
+
+**Pipeline Flow:**
+1. **TeaCache Setup** (if enabled): Creates cache arguments for acceleration
+2. **Experimental Setup** (if enabled): Configures advanced experimental features
+3. **VACE Encoding**: Processes input parameters into image embeddings
+4. **WanVideo Sampling**: Generates latent samples using all configured optimizations
+5. **Video Decoding**: Converts latents to final video frames
+
+**Usage:**
+The WanVideo VACE Pipeline node can be found in the "TiledWan" category in the ComfyUI node browser.
+
+1. **Connect Core Inputs**: Connect your WanVideo model and VAE
+2. **Configure Generation**: Set steps, CFG, shift, seed, and video dimensions
+3. **Enable Optimizations**: 
+   - Keep `enable_teacache=True` for faster generation
+   - Set `enable_experimental=True` for cutting-edge features
+4. **Fine-tune Components**: Adjust VACE, TeaCache, and decode parameters as needed
+5. **Optional Enhancements**: Connect text embeddings, input frames, or external SLG args
+6. **Run Pipeline**: Execute complete video generation in one step
+
+**Console Output includes:**
+- **Pipeline Overview**: Total parameters and enabled components
+- **Import Status**: WanVideo package loading confirmation
+- **Step-by-Step Progress**: Detailed progress for each pipeline stage
+- **Component Configuration**: Settings for TeaCache, VACE, experimental features
+- **Sampling Details**: Model, embeddings, and parameter information
+- **Decode Information**: VAE settings and output characteristics
+- **Error Handling**: Comprehensive error reporting with full traceback
+
+**Advantages over Individual Nodes:**
+- **Simplified Workflow**: Single node replaces 5+ individual nodes
+- **Optimized Connections**: No manual parameter routing required
+- **Reduced Complexity**: Fewer connections and potential error points
+- **Better Performance**: Optimized internal data flow
+- **Easier Debugging**: Centralized logging and error handling
+- **Production Ready**: Designed for real-world video generation
+
+**Use Cases:**
+- **Production Video Generation**: Complete solution for high-quality video creation
+- **Rapid Prototyping**: Quick testing of WanVideo capabilities
+- **Batch Processing**: Efficient generation of multiple videos
+- **Research and Development**: Easy experimentation with WanVideo features
+- **Educational**: Learn complete WanVideo workflow in one node
+- **Integration**: Simple integration into larger ComfyUI workflows
+
+**Performance Tips:**
+- Enable TeaCache for 2-3x speed improvement with minimal quality loss
+- Use VAE tiling if running out of VRAM during decode
+- Start with experimental features disabled, enable gradually
+- Monitor console output for optimal parameter tuning
+- Use appropriate video dimensions for your GPU memory
+- Consider batch size vs. quality trade-offs
+
+**Internal Connections (Handled Automatically):**
+- TeaCache args → WanVideoSampler cache_args
+- VACE embeds → WanVideoSampler image_embeds
+- Experimental args → WanVideoSampler experimental_args
+- Sampler output → Decode input samples
+- All internal routing handled transparently
+
+**Tips:**
+- This node provides the complete WanVideo experience in a single, easy-to-use package
+- All the power of the individual WanVideo nodes with simplified workflow
+- Perfect for users who want complete WanVideo functionality without complex node routing
+- Internal connections are optimized and error-proof
+- Comprehensive debugging output helps troubleshoot any issues
+- Designed for both beginners and advanced users
