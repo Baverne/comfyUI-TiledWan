@@ -1689,15 +1689,6 @@ class TiledWanVideoVACEpipe:
         
         # Step 2: Run WanVideoSampler on this tile
         sampler_node = WanVideoSampler()
-        
-        # Fix potential clip_fea issue
-        text_embeds = kwargs.get("text_embeds")
-        if text_embeds is not None and isinstance(text_embeds, dict) and text_embeds.get("clip_fea") is None:
-            text_embeds = text_embeds.copy()
-            device = next(model.parameters()).device if hasattr(model, 'parameters') else 'cuda'
-            dtype = next(model.parameters()).dtype if hasattr(model, 'parameters') else torch.float16
-            text_embeds["clip_fea"] = torch.zeros((1, 77, 768), device=device, dtype=dtype)
-        
         latent_samples = sampler_node.process(
             model=model,
             image_embeds=vace_embeds,
@@ -1707,7 +1698,7 @@ class TiledWanVideoVACEpipe:
             seed=seed,
             scheduler=scheduler,
             riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-            text_embeds=text_embeds,  # Use potentially fixed version
+            text_embeds=kwargs.get("text_embeds"),
             samples=kwargs.get("samples"),
             denoise_strength=kwargs.get("denoise_strength", 1.0),
             force_offload=kwargs.get("force_offload", True),
