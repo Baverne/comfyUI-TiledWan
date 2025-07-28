@@ -1403,6 +1403,7 @@ class TiledWanVideoVACEpipe:
                 
                 # Processing parameters
                 "debug_mode": ("BOOLEAN", {"default": True}),
+                "debug_color_shift": ("BOOLEAN", {"default": True}),
                 "force_offload_between_tiles": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -1450,7 +1451,7 @@ class TiledWanVideoVACEpipe:
                               frame_overlap, spatial_overlap, steps, cfg, shift, seed, scheduler,
                               vace_strength, vace_start_percent, vace_end_percent, 
                               decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
-                              decode_tile_stride_x, decode_tile_stride_y, debug_mode, 
+                              decode_tile_stride_x, decode_tile_stride_y, debug_mode, debug_color_shift,
                               force_offload_between_tiles, **kwargs):
         """
         Process large video through tiled WanVideo VACE pipeline with memory management
@@ -1541,7 +1542,7 @@ class TiledWanVideoVACEpipe:
                                 steps, cfg, shift, seed + tile_idx,  # Unique seed per tile
                                 scheduler, vace_strength, vace_start_percent, vace_end_percent,
                                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
-                                decode_tile_stride_x, decode_tile_stride_y, kwargs
+                                decode_tile_stride_x, decode_tile_stride_y, debug_color_shift, kwargs
                             )
                             
                             # Place processed tile back with fade blending
@@ -1619,7 +1620,7 @@ class TiledWanVideoVACEpipe:
                                      steps, cfg, shift, seed, scheduler, vace_strength,
                                      vace_start_percent, vace_end_percent, decode_enable_vae_tiling,
                                      decode_tile_x, decode_tile_y, decode_tile_stride_x, 
-                                     decode_tile_stride_y, kwargs):
+                                     decode_tile_stride_y, debug_color_shift, kwargs):
         """Process a single tile through the complete WanVideo VACE pipeline"""
         
         tile_frames, tile_height, tile_width = video_tile.shape[:3]
@@ -1689,7 +1690,33 @@ class TiledWanVideoVACEpipe:
             normalization=kwargs.get("decode_normalization", "default")
         )[0]
         
-        return processed_tile, latent_samples
+        # Step 4: Apply debug color shift to identify tiles visually (if enabled)
+        if debug_color_shift:
+            debug_color_shifted_tile = self._apply_debug_color_shift(processed_tile, seed)
+            return debug_color_shifted_tile, latent_samples
+        else:
+            return processed_tile, latent_samples
+    
+    def _apply_debug_color_shift(self, tile, seed):
+        """Apply a random color shift to each tile for debugging visualization"""
+        import random
+        
+        # Generate truly random RGB shifts (different each time, not based on seed)
+        r_shift = (random.random() - 0.5) * 0.3  # ±0.15 range
+        g_shift = (random.random() - 0.5) * 0.3  # ±0.15 range  
+        b_shift = (random.random() - 0.5) * 0.3  # ±0.15 range
+        
+        print(f"      🎨 Debug color shift - Tile: R{r_shift:+.3f}, G{g_shift:+.3f}, B{b_shift:+.3f}")
+        
+        # Apply color shift to the tile
+        shifted_tile = tile.clone()
+        
+        if tile.shape[-1] >= 3:  # Ensure we have RGB channels
+            shifted_tile[:, :, :, 0] = torch.clamp(shifted_tile[:, :, :, 0] + r_shift, 0, 1)
+            shifted_tile[:, :, :, 1] = torch.clamp(shifted_tile[:, :, :, 1] + g_shift, 0, 1)
+            shifted_tile[:, :, :, 2] = torch.clamp(shifted_tile[:, :, :, 2] + b_shift, 0, 1)
+        
+        return shifted_tile
     
     def _force_memory_cleanup(self, model, vae):
         """Force memory cleanup between tile processing"""
