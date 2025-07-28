@@ -1805,56 +1805,73 @@ class TiledWanVideoVACEpipe:
         """Place tile into target tensor, handling overlaps with spatial fade blending"""
         tile_h, tile_w = tile.shape[1:3]
         
-        # Get the target region
+        # Get the target region where this tile will be placed
         target_region = target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :]
         
         # Check if there's existing content (non-zero) in the target area
-        if target_region.sum() > 0:
-            # Use production-quality fade blending
+        has_existing_content = target_region.abs().sum() > 1e-6  # Use small threshold for floating point
+        
+        if has_existing_content:
+            # There's overlap - apply fade blending
             fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
             
-            # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
+            # Apply fade blending: existing * (1 - fade_mask) + new_tile * fade_mask
+            # This creates linear interpolation from existing (0%) to new (100%)
             blended = target_region * (1.0 - fade_mask) + tile * fade_mask
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = blended
+            
+            print(f"      🔗 Blend applied - Overlap detected, fade mask range: {fade_mask.min().item():.3f} to {fade_mask.max().item():.3f}")
         else:
-            # First tile in this area - place directly
+            # No existing content - place tile directly
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
+            print(f"      📍 Direct placement - No overlap detected")
     
     def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
         """Create a spatial fade mask for smooth blending between tiles"""
         # Create base mask (1.0 = use new tile, 0.0 = use existing)
         mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
         
-        # Define fade distance
-        fade_h = min(10, tile_h // 4)
-        fade_w = min(10, tile_w // 4)
+        # Define fade distance - make it proportional to overlap
+        fade_h = min(20, tile_h // 2)  # Increased fade distance
+        fade_w = min(20, tile_w // 2)  # Increased fade distance
         
-        # Check which edges have existing content
+        # Check which edges have existing content to determine fade direction
         has_top = existing[:, :fade_h, :, :].sum() > 0
         has_bottom = existing[:, -fade_h:, :, :].sum() > 0
         has_left = existing[:, :, :fade_w, :].sum() > 0
         has_right = existing[:, :, -fade_w:, :].sum() > 0
         
-        # Create fade gradients for each edge
+        # Create fade gradients for each edge that has existing content
         if has_top:
+            # Fade from 0 at top edge to 1 at fade_h distance
             for i in range(fade_h):
-                alpha = i / fade_h
+                alpha = i / fade_h  # Linear interpolation: 0 -> 1
                 mask[:, i, :, :] = alpha
         
         if has_bottom:
+            # Fade from 1 at (tile_h - fade_h) to 0 at bottom edge
             for i in range(fade_h):
-                alpha = 1.0 - (i / fade_h)
+                alpha = 1.0 - (i / fade_h)  # Linear interpolation: 1 -> 0
                 mask[:, tile_h - 1 - i, :, :] = alpha
         
         if has_left:
+            # Fade from 0 at left edge to 1 at fade_w distance
             for i in range(fade_w):
-                alpha = i / fade_w
+                alpha = i / fade_w  # Linear interpolation: 0 -> 1
+                # Use minimum to handle corner cases where multiple edges overlap
                 mask[:, :, i, :] = torch.minimum(mask[:, :, i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
         
         if has_right:
+            # Fade from 1 at (tile_w - fade_w) to 0 at right edge
             for i in range(fade_w):
-                alpha = 1.0 - (i / fade_w)
+                alpha = 1.0 - (i / fade_w)  # Linear interpolation: 1 -> 0
+                # Use minimum to handle corner cases where multiple edges overlap
                 mask[:, :, tile_w - 1 - i, :] = torch.minimum(mask[:, :, tile_w - 1 - i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
+        
+        # Debug: Print fade mask statistics
+        if mask.min() < 1.0:  # Only print if there's actually fading happening
+            print(f"      🎭 Fade mask applied - Range: {mask.min().item():.3f} to {mask.max().item():.3f}")
+            print(f"         Edges with overlap: T:{has_top} B:{has_bottom} L:{has_left} R:{has_right}")
         
         return mask.expand_as(new_tile)
     
