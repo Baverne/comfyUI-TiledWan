@@ -1072,7 +1072,17 @@ class TileAndStitchBack:
             
             # STEP 4: Time-wise stitching (stitch temporal chunks together)
             print(f"\n🔸 STEP 4: Time-wise stitching...")
-            final_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
+            stitched_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
+            
+            # STEP 5: Crop back to original dimensions
+            print(f"\n🔸 STEP 5: Cropping to original dimensions...")
+            print(f"   📐 Stitched video shape: {stitched_video.shape}")
+            print(f"   🎯 Target shape: [{batch_size}, {height}, {width}, {channels}]")
+            
+            # Crop spatial dimensions back to original size
+            final_video = stitched_video[:batch_size, :height, :width, :channels]
+            
+            print(f"   ✂️  Cropped to: {final_video.shape}")
             
             # Generate summary
             tile_info_summary = self._generate_tile_info_summary_new(
@@ -1080,8 +1090,11 @@ class TileAndStitchBack:
             )
             
             print(f"✅ Dimension-wise tiling and stitching completed!")
-            print(f"📤 Output video shape: {final_video.shape}")
+            print(f"📤 Final video shape: {final_video.shape} (cropped to match input)")
             print(f"🧩 Total tiles processed: {len(all_tiles)}")
+            print(f"📏 Original input: {batch_size}×{height}×{width}×{channels}")
+            print(f"📏 After stitching: {stitched_video.shape}")
+            print(f"📏 After cropping: {final_video.shape}")
             print("="*80 + "\n")
             
             return (final_video, tile_info_summary)
@@ -1557,8 +1570,9 @@ class TileAndStitchBack:
             max_cols = max(len(line_tiles) for line_tiles in line_groups.values())
             summary_lines.append(f"  Chunk {t_idx}: {len(line_groups)} lines × {max_cols} columns")
         
-        summary_lines.append("Processing order: Column-wise → Line-wise → Temporal")
+        summary_lines.append("Processing order: Column-wise → Line-wise → Temporal → Crop")
         summary_lines.append("Last tiles in each dimension use full-region fade blending")
+        summary_lines.append("Final video cropped back to original input dimensions")
         summary_lines.append("="*60)
         
         return "\n".join(summary_lines)
