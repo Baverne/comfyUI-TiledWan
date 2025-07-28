@@ -1693,6 +1693,15 @@ class TiledWanVideoVACEpipe:
             print(f"           - text_embeds keys: {list(text_embeds.keys())}")
             for key, value in text_embeds.items():
                 print(f"           - {key}: {type(value)} ({'None' if value is None else 'OK'})")
+                if isinstance(value, list):
+                    print(f"             * {key} length: {len(value)}")
+                    for i, item in enumerate(value[:3]):  # Show first 3 items
+                        if item is None:
+                            print(f"             * {key}[{i}]: None ❌")
+                        else:
+                            print(f"             * {key}[{i}]: {type(item)} shape={getattr(item, 'shape', 'no shape')}")
+                    if len(value) > 3:
+                        print(f"             * ... and {len(value) - 3} more items")
         
         samples = kwargs.get("samples")
         print(f"         • samples: {type(samples)} ({'None' if samples is None else 'OK'})")
@@ -1714,7 +1723,9 @@ class TiledWanVideoVACEpipe:
         print(f"         • multitalk_embeds: {type(kwargs.get('multitalk_embeds'))} ({'None' if kwargs.get('multitalk_embeds') is None else 'OK'})")
         print(f"         • freeinit_args: {type(kwargs.get('freeinit_args'))} ({'None' if kwargs.get('freeinit_args') is None else 'OK'})")
         
-        latent_samples = sampler_node.process(
+        print(f"      🚀 Calling WanVideoSampler.process()...")
+        try:
+            latent_samples = sampler_node.process(
             model=model,
             image_embeds=vace_embeds,
             steps=steps,
@@ -1747,6 +1758,15 @@ class TiledWanVideoVACEpipe:
             multitalk_embeds=kwargs.get("multitalk_embeds"),
             freeinit_args=kwargs.get("freeinit_args")
         )[0]
+        
+        except Exception as sampler_error:
+            print(f"      ❌ WanVideoSampler failed with error: {str(sampler_error)}")
+            print(f"      📋 Full sampler traceback:")
+            import traceback
+            print(traceback.format_exc())
+            raise sampler_error  # Re-raise to maintain original behavior
+        
+        print(f"      ✅ WanVideoSampler completed successfully!")
         
         # Step 3: Decode latents back to video for this tile
         decode_node = WanVideoDecode()
