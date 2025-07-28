@@ -1786,6 +1786,19 @@ class TiledWanVideoVACEpipe:
             final_text_embeds = corrected_text_embeds
         
         sampler_node = WanVideoSampler()
+        
+        # Prepare text_embeds with clip_fea fix if needed
+        sampler_text_embeds = kwargs.get("text_embeds")
+        if sampler_text_embeds is not None and isinstance(sampler_text_embeds, dict):
+            if sampler_text_embeds.get("clip_fea") is None:
+                print(f"         🔧 LAST-MINUTE FIX: Adding clip_fea directly to sampler call...")
+                # Create fixed version just for the sampler call
+                sampler_text_embeds = sampler_text_embeds.copy()
+                device = next(model.parameters()).device if hasattr(model, 'parameters') else 'cuda'
+                dtype = next(model.parameters()).dtype if hasattr(model, 'parameters') else torch.float16
+                sampler_text_embeds["clip_fea"] = torch.zeros((1, 77, 768), device=device, dtype=dtype)
+                print(f"         ✅ Fixed sampler_text_embeds has clip_fea: {sampler_text_embeds['clip_fea'].shape}")
+        
         latent_samples = sampler_node.process(
             model=model,
             image_embeds=vace_embeds,
@@ -1795,8 +1808,8 @@ class TiledWanVideoVACEpipe:
             seed=seed,
             scheduler=scheduler,
             riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-            text_embeds=final_text_embeds,  # Use fresh copy of corrected text_embeds
-            samples=samples_input,  # Explicitly None
+            text_embeds=sampler_text_embeds,  # Use fixed version
+            samples=None,  # Always None for WanVideo
             denoise_strength=kwargs.get("denoise_strength", 1.0),
             force_offload=kwargs.get("force_offload", True),
             
