@@ -1341,7 +1341,7 @@ class TileAndStitchBack:
 
 class TiledWanVideoVACEpipe:
     """
-    Tiled WanVideo VACE Pipeline - The ultimate node for processing large videos.
+    Tiled WanVideo VACE Pipeline - The ultimate node for processing large videos with debugging capabilities.
     
     This node combines the sophisticated tiling system from TileAndStitchBack with 
     the complete WanVideo VACE pipeline. It handles large videos by:
@@ -1350,10 +1350,18 @@ class TiledWanVideoVACEpipe:
     2. Spatial tiling: Split each chunk into 832×480 tiles (20-pixel overlap) 
     3. WanVideo processing: Process each tile through the complete VACE pipeline
     4. Memory management: Properly offload models between tiles to prevent leaks
-    5. Sophisticated stitching: Reconstruct final video with fade blending
+    5. Final stitching: Reconstruct final video with fade blending
+    
+    DEBUG FEATURES:
+    - debug_tile_before: Returns the first tile BEFORE WanVideo processing
+    - debug_tile_after: Returns the first tile AFTER WanVideo processing  
+    - debug_only_first_tile: When enabled, processes only the first tile and returns early
     
     This enables processing of arbitrarily large videos that would otherwise 
-    exceed memory limits, while maintaining WanVideo's optimal performance.
+    exceed Wan training. 
+    The overall spatial and temporal coherence shall be insured 
+    by a first and foremost full resolution and full sequence pass.
+    This method is to be seen as a kind of upscaling method able of reconstructing poor quality first result.
     """
     
     def __init__(self):
@@ -1389,7 +1397,7 @@ class TiledWanVideoVACEpipe:
                 "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
                     {"default": 'unipc'}),
                 
-                # WanVideoVACEEncode parameters  
+                # WanVideoVACEEncode parameters (only user-controllable ones)
                 "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
                 "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
@@ -1401,8 +1409,9 @@ class TiledWanVideoVACEpipe:
                 "decode_tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2040, "step": 8}),
                 "decode_tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8}),
                 
-                # Processing parameters
+                # Processing and Debug parameters
                 "debug_mode": ("BOOLEAN", {"default": True}),
+                "debug_only_first_tile": ("BOOLEAN", {"default": False}),
                 "force_offload_between_tiles": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -1431,7 +1440,7 @@ class TiledWanVideoVACEpipe:
                 "slg_args": ("SLGARGS",),
                 "experimental_args": ("EXPERIMENTALARGS",),
                 
-                # WanVideoVACEEncode optional inputs  
+                # WanVideoVACEEncode optional inputs (only external references)
                 "vace_ref_images": ("IMAGE",),
                 "vace_tiled_vae": ("BOOLEAN", {"default": False}),
                 
@@ -1440,8 +1449,8 @@ class TiledWanVideoVACEpipe:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("processed_video", "processing_info")
+    RETURN_TYPES = ("IMAGE", "STRING", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("processed_video", "processing_info", "debug_tile_before", "debug_tile_after")
     FUNCTION = "process_tiled_wanvideo"
     OUTPUT_NODE = True
     CATEGORY = "TiledWan"
@@ -1451,7 +1460,7 @@ class TiledWanVideoVACEpipe:
                               vace_strength, vace_start_percent, vace_end_percent, 
                               decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
                               decode_tile_stride_x, decode_tile_stride_y, debug_mode, 
-                              force_offload_between_tiles, **kwargs):
+                              debug_only_first_tile, force_offload_between_tiles, **kwargs):
         """
         Process large video through tiled WanVideo VACE pipeline with memory management
         """
@@ -1508,6 +1517,14 @@ class TiledWanVideoVACEpipe:
             print(f"🗺️  Spatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}")
             print(f"📦 Total tiles to process: {total_tiles}")
             
+            # Debug mode check
+            if debug_only_first_tile:
+                print(f"🔍 DEBUG MODE: Processing only the first tile for debugging")
+            
+            # Initialize debug variables
+            debug_tile_before = None
+            debug_tile_after = None
+            
             # Process each temporal chunk
             processed_chunks = []
             processing_info_list = []
@@ -1533,6 +1550,11 @@ class TiledWanVideoVACEpipe:
                         video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
                         mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
                         
+                        # Capture debug tile BEFORE processing (first tile only)
+                        if temporal_idx == 0 and h_idx == 0 and w_idx == 0:
+                            debug_tile_before = video_tile.clone()
+                            print(f"🔍 DEBUG: Captured first tile BEFORE processing - shape: {debug_tile_before.shape}")
+                        
                         # Process tile through WanVideo VACE pipeline
                         try:
                             processed_tile, tile_latents = self._process_tile_through_wanvideo(
@@ -1543,6 +1565,39 @@ class TiledWanVideoVACEpipe:
                                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
                                 decode_tile_stride_x, decode_tile_stride_y, kwargs
                             )
+                            
+                            # Capture debug tile AFTER processing (first tile only)
+                            if temporal_idx == 0 and h_idx == 0 and w_idx == 0:
+                                debug_tile_after = processed_tile.clone()
+                                print(f"🔍 DEBUG: Captured first tile AFTER processing - shape: {debug_tile_after.shape}")
+                                
+                                # If debug_only_first_tile is enabled, process only this tile and return early
+                                if debug_only_first_tile:
+                                    print(f"🔍 DEBUG MODE: Only processing first tile, returning early")
+                                    tile_info = {
+                                        'temporal_chunk': temporal_idx,
+                                        'spatial_tile': (h_idx, w_idx),
+                                        'temporal_range': (t_start, t_end),
+                                        'spatial_range': ((h_start, h_end), (w_start, w_end)),
+                                        'input_shape': video_tile.shape,
+                                        'output_shape': processed_tile.shape,
+                                        'seed_used': seed + tile_idx,
+                                        'status': 'debug_only_first_tile'
+                                    }
+                                    debug_summary = f"=== DEBUG MODE: FIRST TILE ONLY ===\n"
+                                    debug_summary += f"First tile processed only for debugging\n"
+                                    debug_summary += f"Temporal chunk: {temporal_idx}, Spatial tile: ({h_idx}, {w_idx})\n"
+                                    debug_summary += f"Input shape: {video_tile.shape}\n"
+                                    debug_summary += f"Output shape: {processed_tile.shape}\n"
+                                    debug_summary += f"Seed used: {seed + tile_idx}\n"
+                                    debug_summary += f"Tile range: H[{h_start}:{h_end}] × W[{w_start}:{w_end}]\n"
+                                    debug_summary += f"Temporal range: frames {t_start}-{t_end-1}\n"
+                                    
+                                    # Return processed tile placed in a minimal video for visualization
+                                    debug_video = torch.zeros_like(video)
+                                    debug_video[t_start:t_end, h_start:h_end, w_start:w_end, :] = processed_tile
+                                    
+                                    return (debug_video, debug_summary, debug_tile_before, debug_tile_after)
                             
                             # Place processed tile back with fade blending
                             self._place_tile_with_overlap(chunk_processed, processed_tile,
@@ -1602,7 +1657,15 @@ class TiledWanVideoVACEpipe:
             print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
             print("="*80 + "\n")
             
-            return (final_video, processing_summary)
+            # Create dummy debug outputs if none were captured
+            if debug_tile_before is None:
+                debug_tile_before = torch.zeros((1, 64, 64, 3))  # Dummy tile
+                print("⚠️  Warning: No debug tile BEFORE captured")
+            if debug_tile_after is None:
+                debug_tile_after = torch.zeros((1, 64, 64, 3))  # Dummy tile
+                print("⚠️  Warning: No debug tile AFTER captured")
+            
+            return (final_video, processing_summary, debug_tile_before, debug_tile_after)
             
         except Exception as e:
             print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
@@ -1612,7 +1675,9 @@ class TiledWanVideoVACEpipe:
             
             # Return original video in case of error
             error_info = f"Error during tiled WanVideo processing: {str(e)}"
-            return (video, error_info)
+            dummy_debug_before = torch.zeros((1, 64, 64, 3))  # Dummy debug tile
+            dummy_debug_after = torch.zeros((1, 64, 64, 3))   # Dummy debug tile
+            return (video, error_info, dummy_debug_before, dummy_debug_after)
     
     def _process_tile_through_wanvideo(self, video_tile, mask_tile, model, vae,
                                      WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
@@ -1914,10 +1979,6 @@ NODE_CLASS_MAPPINGS = {
     "TiledWanImageToMask": ImageToMask,
     "TiledWanImageStatistics": ImageStatistics,
     "TiledWanMaskStatistics": MaskStatistics,
-    "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple,
-    "TiledWanVideoSLGSimple": TiledWanVideoSLGSimple,
-    "WanVideoVACEpipe": WanVideoVACEpipe,
-    "TileAndStitchBack": TileAndStitchBack,
     "TiledWanVideoVACEpipe": TiledWanVideoVACEpipe
 }
 
@@ -1926,9 +1987,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageToMask": "TiledWan Image To Mask",
     "TiledWanImageStatistics": "TiledWan Image Statistics",
     "TiledWanMaskStatistics": "TiledWan Mask Statistics",
-    "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple",
-    "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple",
-    "WanVideoVACEpipe": "WanVideo VACE Pipeline",
-    "TileAndStitchBack": "Tile and Stitch Back",
     "TiledWanVideoVACEpipe": "Tiled WanVideo VACE Pipeline"
 }
