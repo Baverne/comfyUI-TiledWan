@@ -1072,8 +1072,7 @@ class TileAndStitchBack:
             
             # STEP 4: Time-wise stitching (stitch temporal chunks together)
             print(f"\n🔸 STEP 4: Time-wise stitching...")
-            final_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, 
-                                                          batch_size, height, width, channels, frame_overlap)
+            final_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
             
             # Generate summary
             tile_info_summary = self._generate_tile_info_summary_new(
@@ -1419,8 +1418,7 @@ class TileAndStitchBack:
         # Shape: (1, 1, fade_size, 1) for broadcasting
         return fade_mask.view(1, 1, fade_size, 1)
     
-    def _stitch_temporal_chunks_new(self, temporal_chunks, temporal_tiles, 
-                                   total_frames, height, width, channels, frame_overlap):
+    def _stitch_temporal_chunks_new(self, temporal_chunks, temporal_tiles, frame_overlap):
         """Stitch temporal chunks to create the final output with temporal blending."""
         if not temporal_chunks:
             return None
@@ -1431,7 +1429,23 @@ class TileAndStitchBack:
         # Get dimensions from first chunk
         first_chunk_content = temporal_chunks[0]['content']
         
-        # Initialize result tensor
+        # Calculate total frames accounting for overlaps
+        total_frames = sum(chunk['content'].shape[0] for chunk in temporal_chunks)
+        if frame_overlap > 0:
+            total_frames -= (len(temporal_chunks) - 1) * frame_overlap
+        
+        # Get spatial dimensions from the stitched chunks (not original input)
+        height = first_chunk_content.shape[1]
+        width = first_chunk_content.shape[2]
+        channels = first_chunk_content.shape[3]
+        
+        print(f"   📏 Temporal stitching dimensions:")
+        print(f"      • Total frames: {total_frames}")
+        print(f"      • Spatial size: {height}×{width}")
+        print(f"      • Channels: {channels}")
+        print(f"      • Chunk sizes: {[chunk['content'].shape for chunk in temporal_chunks]}")
+        
+        # Initialize result tensor with correct dimensions
         result = torch.zeros(
             (total_frames, height, width, channels),
             dtype=first_chunk_content.dtype,
