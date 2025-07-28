@@ -1403,7 +1403,6 @@ class TiledWanVideoVACEpipe:
                 
                 # Processing parameters
                 "debug_mode": ("BOOLEAN", {"default": True}),
-                "debug_only_first_tile": ("BOOLEAN", {"default": False}),
                 "force_offload_between_tiles": ("BOOLEAN", {"default": True}),
             },
             "optional": {
@@ -1441,8 +1440,8 @@ class TiledWanVideoVACEpipe:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("processed_video", "processing_info", "debug_tile_before", "debug_tile_after")
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("processed_video", "processing_info")
     FUNCTION = "process_tiled_wanvideo"
     OUTPUT_NODE = True
     CATEGORY = "TiledWan"
@@ -1452,7 +1451,7 @@ class TiledWanVideoVACEpipe:
                               vace_strength, vace_start_percent, vace_end_percent, 
                               decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
                               decode_tile_stride_x, decode_tile_stride_y, debug_mode, 
-                              debug_only_first_tile, force_offload_between_tiles, **kwargs):
+                              force_offload_between_tiles, **kwargs):
         """
         Process large video through tiled WanVideo VACE pipeline with memory management
         """
@@ -1509,10 +1508,6 @@ class TiledWanVideoVACEpipe:
             print(f"🗺️  Spatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}")
             print(f"📦 Total tiles to process: {total_tiles}")
             
-            # Initialize debug variables
-            debug_tile_before = None
-            debug_tile_after = None
-            
             # Process each temporal chunk
             processed_chunks = []
             processing_info_list = []
@@ -1538,10 +1533,6 @@ class TiledWanVideoVACEpipe:
                         video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
                         mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
                         
-                        # Capture debug tile BEFORE processing (first tile only)
-                        if temporal_idx == 0 and h_idx == 0 and w_idx == 0:
-                            debug_tile_before = video_tile.clone()
-                        
                         # Process tile through WanVideo VACE pipeline
                         try:
                             processed_tile, tile_latents = self._process_tile_through_wanvideo(
@@ -1552,22 +1543,6 @@ class TiledWanVideoVACEpipe:
                                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
                                 decode_tile_stride_x, decode_tile_stride_y, kwargs
                             )
-                            
-                            # Capture debug tile AFTER processing (first tile only)
-                            if temporal_idx == 0 and h_idx == 0 and w_idx == 0:
-                                debug_tile_after = processed_tile.clone()
-                                
-                                # If debug_only_first_tile is enabled, return early
-                                if debug_only_first_tile:
-                                    debug_summary = f"=== DEBUG MODE: FIRST TILE ONLY ===\n"
-                                    debug_summary += f"First tile processed only for debugging\n"
-                                    debug_summary += f"Input shape: {video_tile.shape}\n"
-                                    debug_summary += f"Output shape: {processed_tile.shape}\n"
-                                    
-                                    debug_video = torch.zeros_like(video)
-                                    debug_video[t_start:t_end, h_start:h_end, w_start:w_end, :] = processed_tile
-                                    
-                                    return (debug_video, debug_summary, debug_tile_before, debug_tile_after)
                             
                             # Place processed tile back with fade blending
                             self._place_tile_with_overlap(chunk_processed, processed_tile,
@@ -1627,13 +1602,7 @@ class TiledWanVideoVACEpipe:
             print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
             print("="*80 + "\n")
             
-            # Create dummy debug outputs if none were captured
-            if debug_tile_before is None:
-                debug_tile_before = torch.zeros((1, 64, 64, 3))
-            if debug_tile_after is None:
-                debug_tile_after = torch.zeros((1, 64, 64, 3))
-            
-            return (final_video, processing_summary, debug_tile_before, debug_tile_after)
+            return (final_video, processing_summary)
             
         except Exception as e:
             print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
@@ -1643,9 +1612,7 @@ class TiledWanVideoVACEpipe:
             
             # Return original video in case of error
             error_info = f"Error during tiled WanVideo processing: {str(e)}"
-            dummy_debug_before = torch.zeros((1, 64, 64, 3))
-            dummy_debug_after = torch.zeros((1, 64, 64, 3))
-            return (video, error_info, dummy_debug_before, dummy_debug_after)
+            return (video, error_info)
     
     def _process_tile_through_wanvideo(self, video_tile, mask_tile, model, vae,
                                      WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
@@ -1675,64 +1642,7 @@ class TiledWanVideoVACEpipe:
         
         # Step 2: Run WanVideoSampler on this tile
         sampler_node = WanVideoSampler()
-        
-        # Debug: Check all parameters before passing to WanVideoSampler
-        print(f"      🔍 WanVideoSampler Parameters Debug:")
-        print(f"         • model: {type(model)} ({'None' if model is None else 'OK'})")
-        print(f"         • image_embeds: {type(vace_embeds)} ({'None' if vace_embeds is None else 'OK'})")
-        if isinstance(vace_embeds, dict):
-            print(f"           - image_embeds keys: {list(vace_embeds.keys())}")
-            for key, value in vace_embeds.items():
-                if hasattr(value, 'shape'):
-                    print(f"           - {key}: {type(value)} shape={value.shape}")
-                else:
-                    print(f"           - {key}: {type(value)} ({'None' if value is None else 'OK'})")
-        print(f"         • steps: {steps} ({type(steps)})")
-        print(f"         • cfg: {cfg} ({type(cfg)})")
-        print(f"         • shift: {shift} ({type(shift)})")
-        print(f"         • seed: {seed} ({type(seed)})")
-        print(f"         • scheduler: {scheduler} ({type(scheduler)})")
-        print(f"         • riflex_freq_index: {kwargs.get('riflex_freq_index', 0)} ({type(kwargs.get('riflex_freq_index', 0))})")
-        
-        text_embeds = kwargs.get("text_embeds")
-        print(f"         • text_embeds: {type(text_embeds)} ({'None' if text_embeds is None else 'OK'})")
-        if isinstance(text_embeds, dict):
-            print(f"           - text_embeds keys: {list(text_embeds.keys())}")
-            for key, value in text_embeds.items():
-                print(f"           - {key}: {type(value)} ({'None' if value is None else 'OK'})")
-                if isinstance(value, list):
-                    print(f"             * {key} length: {len(value)}")
-                    for i, item in enumerate(value[:3]):  # Show first 3 items
-                        if item is None:
-                            print(f"             * {key}[{i}]: None ❌")
-                        else:
-                            print(f"             * {key}[{i}]: {type(item)} shape={getattr(item, 'shape', 'no shape')}")
-                    if len(value) > 3:
-                        print(f"             * ... and {len(value) - 3} more items")
-        
-        samples = kwargs.get("samples")
-        print(f"         • samples: {type(samples)} ({'None' if samples is None else 'OK'})")
-        
-        print(f"         • denoise_strength: {kwargs.get('denoise_strength', 1.0)} ({type(kwargs.get('denoise_strength', 1.0))})")
-        print(f"         • force_offload: {kwargs.get('force_offload', True)} ({type(kwargs.get('force_offload', True))})")
-        print(f"         • cache_args: {type(kwargs.get('cache_args'))} ({'None' if kwargs.get('cache_args') is None else 'OK'})")
-        print(f"         • slg_args: {type(kwargs.get('slg_args'))} ({'None' if kwargs.get('slg_args') is None else 'OK'})")
-        print(f"         • experimental_args: {type(kwargs.get('experimental_args'))} ({'None' if kwargs.get('experimental_args') is None else 'OK'})")
-        print(f"         • feta_args: {type(kwargs.get('feta_args'))} ({'None' if kwargs.get('feta_args') is None else 'OK'})")
-        print(f"         • context_options: {type(kwargs.get('context_options'))} ({'None' if kwargs.get('context_options') is None else 'OK'})")
-        print(f"         • batched_cfg: {kwargs.get('batched_cfg', False)} ({type(kwargs.get('batched_cfg', False))})")
-        print(f"         • rope_function: {kwargs.get('rope_function', 'comfy')} ({type(kwargs.get('rope_function', 'comfy'))})")
-        print(f"         • loop_args: {type(kwargs.get('loop_args'))} ({'None' if kwargs.get('loop_args') is None else 'OK'})")
-        print(f"         • sigmas: {type(kwargs.get('sigmas'))} ({'None' if kwargs.get('sigmas') is None else 'OK'})")
-        print(f"         • unianimate_poses: {type(kwargs.get('unianimate_poses'))} ({'None' if kwargs.get('unianimate_poses') is None else 'OK'})")
-        print(f"         • fantasytalking_embeds: {type(kwargs.get('fantasytalking_embeds'))} ({'None' if kwargs.get('fantasytalking_embeds') is None else 'OK'})")
-        print(f"         • uni3c_embeds: {type(kwargs.get('uni3c_embeds'))} ({'None' if kwargs.get('uni3c_embeds') is None else 'OK'})")
-        print(f"         • multitalk_embeds: {type(kwargs.get('multitalk_embeds'))} ({'None' if kwargs.get('multitalk_embeds') is None else 'OK'})")
-        print(f"         • freeinit_args: {type(kwargs.get('freeinit_args'))} ({'None' if kwargs.get('freeinit_args') is None else 'OK'})")
-        
-        print(f"      🚀 Calling WanVideoSampler.process()...")
-        try:
-            latent_samples = sampler_node.process(
+        latent_samples = sampler_node.process(
             model=model,
             image_embeds=vace_embeds,
             steps=steps,
@@ -1765,15 +1675,6 @@ class TiledWanVideoVACEpipe:
             multitalk_embeds=kwargs.get("multitalk_embeds"),
             freeinit_args=kwargs.get("freeinit_args")
         )[0]
-        
-        except Exception as sampler_error:
-            print(f"      ❌ WanVideoSampler failed with error: {str(sampler_error)}")
-            print(f"      📋 Full sampler traceback:")
-            import traceback
-            print(traceback.format_exc())
-            raise sampler_error  # Re-raise to maintain original behavior
-        
-        print(f"      ✅ WanVideoSampler completed successfully!")
         
         # Step 3: Decode latents back to video for this tile
         decode_node = WanVideoDecode()
