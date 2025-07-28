@@ -1814,19 +1814,25 @@ class TileAndStitchBack:
 
 class TiledWanVideoVACEpipe:
     """
-    Tiled WanVideo VACE Pipeline - The ultimate node for processing large videos.
+    Dimension-wise Tiled WanVideo VACE Pipeline - The ultimate node for processing large videos.
     
-    This node combines the sophisticated tiling system from TileAndStitchBack with 
-    the complete WanVideo VACE pipeline. It handles large videos by:
+    This node combines the sophisticated dimension-wise tiling system from TileAndStitchBack with 
+    the complete WanVideo VACE pipeline. It handles large videos using the advanced algorithm:
     
-    1. Temporal tiling: Split video into 81-frame chunks (10-frame overlap)
-    2. Spatial tiling: Split each chunk into 832×480 tiles (20-pixel overlap) 
-    3. WanVideo processing: Process each tile through the complete VACE pipeline
-    4. Memory management: Properly offload models between tiles to prevent leaks
-    5. Sophisticated stitching: Reconstruct final video with fade blending
+    1. Temporal tiling: Split video into chunks with overlap (default: 81 frames, 10-frame overlap)
+    2. Spatial tiling: Split each chunk into tiles with overlap (default: 832×480, 20-pixel overlap)
+    3. WanVideo VACE processing: Process each tile through the complete pipeline
+    4. Dimension-wise stitching:
+       a) Column-wise: Stitch tiles vertically within each temporal chunk
+       b) Line-wise: Stitch columns horizontally to complete temporal chunks  
+       c) Temporal: Stitch temporal chunks together across time
+    5. Large overlap handling: Last tiles in each dimension use full-region fade blending
+    6. Cropping: Final video cropped to exact input dimensions
+    7. Memory management: Proper model offloading between tiles to prevent leaks
     
-    This enables processing of arbitrarily large videos that would otherwise 
-    exceed memory limits, while maintaining WanVideo's optimal performance.
+    This enables processing of arbitrarily large videos that would otherwise exceed memory limits,
+    while maintaining WanVideo's optimal performance and eliminating overlap artifacts through
+    sophisticated dimension-wise fade blending.
     """
     
     def __init__(self):
@@ -1927,13 +1933,13 @@ class TiledWanVideoVACEpipe:
                               decode_tile_stride_x, decode_tile_stride_y, debug_mode, debug_color_shift,
                               force_offload_between_tiles, **kwargs):
         """
-        Process large video through tiled WanVideo VACE pipeline with memory management
+        Process large video through tiled WanVideo VACE pipeline with dimension-wise stitching
         """
         
         print("\n" + "="*80)
-        print("              TILED WANVIDEO VACE PIPELINE")
+        print("              TILED WANVIDEO VACE PIPELINE (DIMENSION-WISE)")
         print("="*80)
-        print("🚀 Starting tiled WanVideo VACE processing...")
+        print("🚀 Starting dimension-wise tiled WanVideo VACE processing...")
         
         try:
             # Import WanVideo nodes
@@ -1953,7 +1959,7 @@ class TiledWanVideoVACEpipe:
             WanVideoDecode = wanvideo_package.WanVideoDecode
             print("✅ WanVideo nodes imported successfully!")
             
-            # Input validation
+            # Input validation and preprocessing
             batch_size, height, width, channels = video.shape
             mask_batch, mask_height, mask_width = mask.shape
             
@@ -1966,13 +1972,13 @@ class TiledWanVideoVACEpipe:
             if mask_batch != batch_size or mask_height != height or mask_width != width:
                 print(f"⚠️  Warning: Mask dimensions {mask.shape} don't match video {video.shape}")
                 print("   Resizing mask to match video...")
-                # Resize mask to match video
                 mask = torch.nn.functional.interpolate(
                     mask.unsqueeze(1), size=(height, width), mode='nearest'
                 ).squeeze(1)
                 print(f"✅ Mask resized to: {mask.shape}")
             
-            # Calculate temporal and spatial tiles
+            # STEP 1: Calculate tile dimensions using improved algorithm
+            print(f"\n📏 STEP 1: Calculating optimal tile layout...")
             temporal_tiles = self._calculate_temporal_tiles(batch_size, target_frames, frame_overlap)
             spatial_tiles_h = self._calculate_spatial_tiles(height, target_height, spatial_overlap) 
             spatial_tiles_w = self._calculate_spatial_tiles(width, target_width, spatial_overlap)
@@ -1982,97 +1988,44 @@ class TiledWanVideoVACEpipe:
             print(f"🗺️  Spatial tiles per frame: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}")
             print(f"📦 Total tiles to process: {total_tiles}")
             
-            # Process each temporal chunk
-            processed_chunks = []
-            processing_info_list = []
+            # STEP 2: Extract all tiles and process through WanVideo VACE pipeline
+            print(f"\n🧩 STEP 2: Extracting and processing {total_tiles} tiles through WanVideo VACE...")
+            all_tiles = self._extract_and_process_wanvideo_tiles(
+                video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
+                model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
+                debug_color_shift, force_offload_between_tiles, debug_mode, kwargs
+            )
             
-            for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
-                print(f"\n🎬 Processing temporal chunk {temporal_idx + 1}/{len(temporal_tiles)} (frames {t_start}-{t_end-1})")
-                
-                # Extract temporal chunk for video and mask
-                video_chunk = video[t_start:t_end]
-                mask_chunk = mask[t_start:t_end]
-                chunk_processed = torch.zeros_like(video_chunk)
-                
-                # Process each spatial tile within this temporal chunk
-                for h_idx, (h_start, h_end) in enumerate(spatial_tiles_h):
-                    for w_idx, (w_start, w_end) in enumerate(spatial_tiles_w):
-                        tile_idx = h_idx * len(spatial_tiles_w) + w_idx
-                        
-                        if debug_mode:
-                            print(f"   🧩 Tile {tile_idx + 1}/{len(spatial_tiles_h) * len(spatial_tiles_w)}: "
-                                  f"H[{h_start}:{h_end}] × W[{w_start}:{w_end}]")
-                        
-                        # Extract spatial tiles (video and mask)
-                        video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
-                        mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
-                        
-                        # Process tile through WanVideo VACE pipeline
-                        try:
-                            processed_tile, tile_latents = self._process_tile_through_wanvideo(
-                                video_tile, mask_tile, model, vae, 
-                                WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
-                                steps, cfg, shift, seed + tile_idx,  # Unique seed per tile
-                                scheduler, vace_strength, vace_start_percent, vace_end_percent,
-                                decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
-                                decode_tile_stride_x, decode_tile_stride_y, debug_color_shift, kwargs
-                            )
-                            
-                            # Place processed tile back with fade blending
-                            self._place_tile_with_overlap(chunk_processed, processed_tile,
-                                                        h_start, h_end, w_start, w_end, spatial_overlap)
-                            
-                            # Record processing info
-                            tile_info = {
-                                'temporal_chunk': temporal_idx,
-                                'spatial_tile': (h_idx, w_idx),
-                                'temporal_range': (t_start, t_end),
-                                'spatial_range': ((h_start, h_end), (w_start, w_end)),
-                                'input_shape': video_tile.shape,
-                                'output_shape': processed_tile.shape,
-                                'seed_used': seed + tile_idx,
-                                'status': 'success'
-                            }
-                            processing_info_list.append(tile_info)
-                            
-                            # Force memory cleanup between tiles if requested
-                            if force_offload_between_tiles:
-                                self._force_memory_cleanup(model, vae)
-                                
-                        except Exception as tile_error:
-                            print(f"      ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
-                            # Use original tile as fallback
-                            self._place_tile_with_overlap(chunk_processed, video_tile,
-                                                        h_start, h_end, w_start, w_end, spatial_overlap)
-                            
-                            tile_info = {
-                                'temporal_chunk': temporal_idx,
-                                'spatial_tile': (h_idx, w_idx),
-                                'temporal_range': (t_start, t_end),
-                                'spatial_range': ((h_start, h_end), (w_start, w_end)),
-                                'input_shape': video_tile.shape,
-                                'output_shape': video_tile.shape,
-                                'seed_used': seed + tile_idx,
-                                'status': f'failed: {str(tile_error)}'
-                            }
-                            processing_info_list.append(tile_info)
-                
-                processed_chunks.append(chunk_processed)
-                print(f"✅ Temporal chunk {temporal_idx + 1} processed")
+            # STEP 3: Dimension-wise stitching - Column-wise (vertical stitching)
+            print(f"\n🔄 STEP 3: Column-wise stitching (vertical)...")
+            column_strips = self._stitch_columns(all_tiles, spatial_overlap, debug_mode)
             
-            # Stitch temporal chunks back together
-            print(f"\n🔗 Stitching {len(processed_chunks)} temporal chunks back together...")
-            final_video = self._stitch_temporal_chunks(processed_chunks, temporal_tiles,
-                                                     batch_size, height, width, channels, frame_overlap)
+            # STEP 4: Dimension-wise stitching - Line-wise (horizontal stitching)  
+            print(f"\n🔄 STEP 4: Line-wise stitching (horizontal)...")
+            temporal_chunks = self._stitch_lines(column_strips, spatial_overlap, debug_mode)
+            
+            # STEP 5: Dimension-wise stitching - Temporal stitching
+            print(f"\n🔄 STEP 5: Temporal stitching...")
+            stitched_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
+            
+            # STEP 6: Crop to original dimensions (ensure exact input size)
+            print(f"\n✂️ STEP 6: Cropping to original dimensions...")
+            print(f"📐 Stitched video shape: {stitched_video.shape}")
+            print(f"🎯 Target shape: {video.shape}")
+            final_video = stitched_video[:batch_size, :height, :width, :channels]
+            print(f"✂️ Cropped to: {final_video.shape}")
             
             # Generate comprehensive processing info
-            processing_summary = self._generate_processing_summary(processing_info_list, temporal_tiles,
-                                                                 spatial_tiles_h, spatial_tiles_w, total_tiles)
+            processing_summary = self._generate_wanvideo_processing_summary(
+                all_tiles, temporal_tiles, spatial_tiles_h, spatial_tiles_w, total_tiles
+            )
             
-            print(f"✅ Tiled WanVideo VACE processing completed!")
-            print(f"📤 Output video shape: {final_video.shape}")
-            print(f"🧩 Total tiles processed: {len(processing_info_list)}")
-            successful_tiles = sum(1 for info in processing_info_list if info['status'] == 'success')
+            print(f"✅ Dimension-wise tiled WanVideo VACE processing completed!")
+            print(f"📤 Final video shape: {final_video.shape}")
+            print(f"🧩 Total tiles processed: {len(all_tiles)}")
+            successful_tiles = sum(1 for tile in all_tiles if hasattr(tile, 'processing_status') and tile.processing_status == 'success')
             print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
             print("="*80 + "\n")
             
@@ -2081,12 +2034,104 @@ class TiledWanVideoVACEpipe:
         except Exception as e:
             print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
             print(f"📋 Full traceback:")
+            import traceback
             print(traceback.format_exc())
             print("="*80 + "\n")
             
             # Return original video in case of error
             error_info = f"Error during tiled WanVideo processing: {str(e)}"
             return (video, error_info)
+    
+    
+    def _extract_and_process_wanvideo_tiles(self, video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
+                                          model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                                          steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                                          decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
+                                          debug_color_shift, force_offload_between_tiles, debug_mode, kwargs):
+        """
+        Extract all tiles and process through WanVideo VACE pipeline, storing them in Tile objects
+        """
+        all_tiles = []
+        
+        for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
+            if debug_mode:
+                print(f"   🎬 Processing temporal chunk {temporal_idx + 1}/{len(temporal_tiles)} (frames {t_start}-{t_end-1})")
+            
+            # Extract temporal chunk
+            video_chunk = video[t_start:t_end]
+            mask_chunk = mask[t_start:t_end]
+            
+            # Process each spatial tile within this temporal chunk
+            for h_idx, (h_start, h_end) in enumerate(spatial_tiles_h):
+                for w_idx, (w_start, w_end) in enumerate(spatial_tiles_w):
+                    tile_idx = len(all_tiles)  # Global tile index
+                    
+                    if debug_mode:
+                        print(f"      🧩 Tile {tile_idx + 1}: T{temporal_idx}:L{h_idx}:C{w_idx} "
+                              f"H[{h_start}:{h_end}] × W[{w_start}:{w_end}]")
+                    
+                    # Extract spatial tiles from temporal chunk
+                    video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
+                    mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
+                    
+                    # Process tile through WanVideo VACE pipeline
+                    try:
+                        processed_tile, tile_latents = self._process_tile_through_wanvideo(
+                            video_tile, mask_tile, model, vae, 
+                            WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                            steps, cfg, shift, seed + tile_idx,  # Unique seed per tile
+                            scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                            decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
+                            decode_tile_stride_x, decode_tile_stride_y, debug_color_shift, kwargs
+                        )
+                        
+                        # Create Tile object with processed content
+                        tile = Tile(
+                            content=processed_tile,
+                            temporal_index=temporal_idx,
+                            line_index=h_idx,
+                            column_index=w_idx,
+                            temporal_range=(t_start, t_end),
+                            spatial_range_h=(h_start, h_end),
+                            spatial_range_w=(w_start, w_end)
+                        )
+                        
+                        # Store processing status for tracking
+                        tile.processing_status = 'success'
+                        tile.seed_used = seed + tile_idx
+                        tile.latents = tile_latents  # Store latents for potential future use
+                        
+                        all_tiles.append(tile)
+                        
+                        # Force memory cleanup between tiles if requested
+                        if force_offload_between_tiles:
+                            self._force_memory_cleanup(model, vae)
+                            
+                    except Exception as tile_error:
+                        print(f"         ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
+                        
+                        # Create fallback Tile object with original content
+                        tile = Tile(
+                            content=video_tile,  # Use original video tile as fallback
+                            temporal_index=temporal_idx,
+                            line_index=h_idx,
+                            column_index=w_idx,
+                            temporal_range=(t_start, t_end),
+                            spatial_range_h=(h_start, h_end),
+                            spatial_range_w=(w_start, w_end)
+                        )
+                        
+                        # Store error status for tracking
+                        tile.processing_status = f'failed: {str(tile_error)}'
+                        tile.seed_used = seed + tile_idx
+                        tile.latents = None
+                        
+                        all_tiles.append(tile)
+        
+        print(f"   ✅ Extracted and processed {len(all_tiles)} tiles through WanVideo VACE pipeline")
+        successful_tiles = sum(1 for tile in all_tiles if tile.processing_status == 'success')
+        print(f"   🎯 Success rate: {successful_tiles}/{len(all_tiles)} ({(successful_tiles/len(all_tiles))*100:.1f}%)")
+        return all_tiles
     
     def _process_tile_through_wanvideo(self, video_tile, mask_tile, model, vae,
                                      WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
@@ -2190,6 +2235,385 @@ class TiledWanVideoVACEpipe:
             shifted_tile[:, :, :, 2] = torch.clamp(shifted_tile[:, :, :, 2] + b_shift, 0, 1)
         
         return shifted_tile
+    
+    def _stitch_columns(self, all_tiles, spatial_overlap, debug_mode):
+        """
+        Stitch tiles vertically (same column, same temporal chunk) to create column strips
+        """
+        # Group tiles by temporal_index and column_index
+        column_groups = {}
+        for tile in all_tiles:
+            key = (tile.temporal_index, tile.column_index)
+            if key not in column_groups:
+                column_groups[key] = []
+            column_groups[key].append(tile)
+        
+        # Sort each group by line_index
+        for key in column_groups:
+            column_groups[key].sort(key=lambda t: t.line_index)
+        
+        column_strips = []
+        
+        for (temporal_idx, col_idx), column_tiles in column_groups.items():
+            if debug_mode and temporal_idx == 0:
+                print(f"      🔄 Column {col_idx}: {len(column_tiles)} tiles")
+            
+            # Stitch tiles in this column vertically
+            if len(column_tiles) == 1:
+                column_strip = column_tiles[0].content
+            else:
+                column_strip = self._stitch_tiles_vertically(column_tiles, spatial_overlap)
+            
+            # Store column strip with its position info
+            strip_info = {
+                'content': column_strip,
+                'temporal_index': temporal_idx,
+                'column_index': col_idx,
+                'spatial_range_w': column_tiles[0].spatial_range_w,
+                'spatial_range_h': (column_tiles[0].spatial_range_h[0], column_tiles[-1].spatial_range_h[1])
+            }
+            column_strips.append(strip_info)
+        
+        print(f"   ✅ Created {len(column_strips)} column strips")
+        return column_strips
+    
+    def _stitch_lines(self, column_strips, spatial_overlap, debug_mode):
+        """
+        Stitch column strips horizontally (same temporal chunk) to create complete temporal chunks
+        """
+        # Group column strips by temporal_index
+        temporal_groups = {}
+        for strip in column_strips:
+            temporal_idx = strip['temporal_index']
+            if temporal_idx not in temporal_groups:
+                temporal_groups[temporal_idx] = []
+            temporal_groups[temporal_idx].append(strip)
+        
+        # Sort each group by column_index
+        for temporal_idx in temporal_groups:
+            temporal_groups[temporal_idx].sort(key=lambda s: s['column_index'])
+        
+        temporal_chunks = []
+        
+        for temporal_idx, strips in temporal_groups.items():
+            if debug_mode and temporal_idx == 0:
+                print(f"      🔄 Temporal chunk {temporal_idx}: {len(strips)} strips")
+            
+            # Stitch column strips horizontally
+            if len(strips) == 1:
+                chunk_content = strips[0]['content']
+            else:
+                chunk_content = self._stitch_strips_horizontally(strips, spatial_overlap)
+            
+            # Store temporal chunk with its info
+            chunk_info = {
+                'content': chunk_content,
+                'temporal_index': temporal_idx,
+                'spatial_range_h': strips[0]['spatial_range_h'],
+                'spatial_range_w': (strips[0]['spatial_range_w'][0], strips[-1]['spatial_range_w'][1])
+            }
+            temporal_chunks.append(chunk_info)
+        
+        # Sort by temporal index
+        temporal_chunks.sort(key=lambda c: c['temporal_index'])
+        
+        print(f"   ✅ Created {len(temporal_chunks)} temporal chunks")
+        return temporal_chunks
+    
+    def _stitch_tiles_vertically(self, column_tiles, spatial_overlap):
+        """
+        Stitch tiles vertically (in height dimension) with proper fade blending
+        """
+        if len(column_tiles) == 1:
+            return column_tiles[0].content
+        
+        # Get dimensions
+        first_tile = column_tiles[0].content
+        total_height = sum(tile.spatial_range_h[1] - tile.spatial_range_h[0] for tile in column_tiles)
+        # Subtract overlaps
+        total_height -= spatial_overlap * (len(column_tiles) - 1)
+        
+        width = first_tile.shape[2]
+        channels = first_tile.shape[3]
+        frames = first_tile.shape[0]
+        
+        # Create result tensor
+        result = torch.zeros((frames, total_height, width, channels), 
+                           dtype=first_tile.dtype, device=first_tile.device)
+        
+        current_h = 0
+        for i, tile in enumerate(column_tiles):
+            tile_h = tile.content.shape[1]
+            
+            if i == 0:
+                # First tile - place entirely
+                result[:, current_h:current_h+tile_h, :, :] = tile.content
+                current_h += tile_h
+            else:
+                # Subsequent tiles - check for last tile with large overlap
+                is_last_tile = (i == len(column_tiles) - 1)
+                
+                # Calculate actual overlap
+                expected_start = tile.spatial_range_h[0]
+                actual_overlap = current_h - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
+                
+                if is_last_tile and actual_overlap > spatial_overlap:
+                    # Last tile with large overlap - use full region fade blending
+                    print(f"🔥 Last tile: Large overlap detected ({actual_overlap} > {spatial_overlap})")
+                    
+                    # Calculate overlap region in both tensors
+                    overlap_h = actual_overlap
+                    
+                    # Get regions for blending
+                    result_overlap = result[:, current_h-overlap_h:current_h, :, :]
+                    tile_overlap = tile.content[:, :overlap_h, :, :]
+                    
+                    # Create vertical fade mask for the overlap region
+                    fade_mask = self._create_vertical_fade_mask(overlap_h, result_overlap.dtype, result_overlap.device)
+                    
+                    # Apply fade blending across the entire overlap region
+                    blended_overlap = result_overlap * (1.0 - fade_mask) + tile_overlap * fade_mask
+                    result[:, current_h-overlap_h:current_h, :, :] = blended_overlap
+                    
+                    # Place the non-overlapping part of the tile
+                    if tile_h > overlap_h:
+                        result[:, current_h:current_h+tile_h-overlap_h, :, :] = tile.content[:, overlap_h:, :, :]
+                    current_h += tile_h - overlap_h
+                else:
+                    # Normal overlap handling
+                    overlap_h = min(spatial_overlap, tile_h // 2, current_h)
+                    
+                    if overlap_h > 0:
+                        # Get regions for blending
+                        result_overlap = result[:, current_h-overlap_h:current_h, :, :]
+                        tile_overlap = tile.content[:, :overlap_h, :, :]
+                        
+                        # Create vertical fade mask
+                        fade_mask = self._create_vertical_fade_mask(overlap_h, result_overlap.dtype, result_overlap.device)
+                        
+                        # Apply fade blending
+                        blended_overlap = result_overlap * (1.0 - fade_mask) + tile_overlap * fade_mask
+                        result[:, current_h-overlap_h:current_h, :, :] = blended_overlap
+                        
+                        # Place the non-overlapping part
+                        if tile_h > overlap_h:
+                            result[:, current_h:current_h+tile_h-overlap_h, :, :] = tile.content[:, overlap_h:, :, :]
+                        current_h += tile_h - overlap_h
+                    else:
+                        # No overlap - place directly
+                        result[:, current_h:current_h+tile_h, :, :] = tile.content
+                        current_h += tile_h
+        
+        return result
+    
+    def _stitch_strips_horizontally(self, strips, spatial_overlap):
+        """
+        Stitch column strips horizontally (in width dimension) with proper fade blending
+        """
+        if len(strips) == 1:
+            return strips[0]['content']
+        
+        # Get dimensions
+        first_strip = strips[0]['content']
+        total_width = sum(s['spatial_range_w'][1] - s['spatial_range_w'][0] for s in strips)
+        # Subtract overlaps
+        total_width -= spatial_overlap * (len(strips) - 1)
+        
+        height = first_strip.shape[1]
+        channels = first_strip.shape[3]
+        frames = first_strip.shape[0]
+        
+        # Create result tensor
+        result = torch.zeros((frames, height, total_width, channels), 
+                           dtype=first_strip.dtype, device=first_strip.device)
+        
+        current_w = 0
+        for i, strip in enumerate(strips):
+            strip_content = strip['content']
+            strip_w = strip_content.shape[2]
+            
+            if i == 0:
+                # First strip - place entirely
+                result[:, :, current_w:current_w+strip_w, :] = strip_content
+                current_w += strip_w
+            else:
+                # Subsequent strips - check for last strip with large overlap
+                is_last_strip = (i == len(strips) - 1)
+                
+                # Calculate actual overlap
+                expected_start = strip['spatial_range_w'][0]
+                actual_overlap = current_w - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
+                
+                if is_last_strip and actual_overlap > spatial_overlap:
+                    # Last strip with large overlap - use full region fade blending
+                    print(f"🔥 Last strip: Large overlap detected ({actual_overlap} > {spatial_overlap})")
+                    
+                    # Calculate overlap region
+                    overlap_w = actual_overlap
+                    
+                    # Get regions for blending
+                    result_overlap = result[:, :, current_w-overlap_w:current_w, :]
+                    strip_overlap = strip_content[:, :, :overlap_w, :]
+                    
+                    # Create horizontal fade mask
+                    fade_mask = self._create_horizontal_fade_mask(overlap_w, result_overlap.dtype, result_overlap.device)
+                    
+                    # Apply fade blending across the entire overlap region
+                    blended_overlap = result_overlap * (1.0 - fade_mask) + strip_overlap * fade_mask
+                    result[:, :, current_w-overlap_w:current_w, :] = blended_overlap
+                    
+                    # Place the non-overlapping part
+                    if strip_w > overlap_w:
+                        result[:, :, current_w:current_w+strip_w-overlap_w, :] = strip_content[:, :, overlap_w:, :]
+                    current_w += strip_w - overlap_w
+                else:
+                    # Normal overlap handling
+                    overlap_w = min(spatial_overlap, strip_w // 2, current_w)
+                    
+                    if overlap_w > 0:
+                        # Get regions for blending
+                        result_overlap = result[:, :, current_w-overlap_w:current_w, :]
+                        strip_overlap = strip_content[:, :, :overlap_w, :]
+                        
+                        # Create horizontal fade mask
+                        fade_mask = self._create_horizontal_fade_mask(overlap_w, result_overlap.dtype, result_overlap.device)
+                        
+                        # Apply fade blending
+                        blended_overlap = result_overlap * (1.0 - fade_mask) + strip_overlap * fade_mask
+                        result[:, :, current_w-overlap_w:current_w, :] = blended_overlap
+                        
+                        # Place the non-overlapping part
+                        if strip_w > overlap_w:
+                            result[:, :, current_w:current_w+strip_w-overlap_w, :] = strip_content[:, :, overlap_w:, :]
+                        current_w += strip_w - overlap_w
+                    else:
+                        # No overlap - place directly
+                        result[:, :, current_w:current_w+strip_w, :] = strip_content
+                        current_w += strip_w
+        
+        return result
+    
+    def _create_vertical_fade_mask(self, fade_size, dtype, device):
+        """Create a vertical fade mask for blending tiles vertically."""
+        fade_mask = torch.linspace(0, 1, fade_size, dtype=dtype, device=device)
+        # Shape: (1, fade_size, 1, 1) for broadcasting
+        return fade_mask.view(1, fade_size, 1, 1)
+    
+    def _create_horizontal_fade_mask(self, fade_size, dtype, device):
+        """Create a horizontal fade mask for blending tiles horizontally."""
+        fade_mask = torch.linspace(0, 1, fade_size, dtype=dtype, device=device)
+        # Shape: (1, 1, fade_size, 1) for broadcasting
+        return fade_mask.view(1, 1, fade_size, 1)
+    
+    def _stitch_temporal_chunks_new(self, temporal_chunks, temporal_tiles, frame_overlap):
+        """Stitch temporal chunks to create the final output with temporal blending."""
+        if not temporal_chunks:
+            return None
+            
+        if len(temporal_chunks) == 1:
+            return temporal_chunks[0]['content']
+        
+        # Get dimensions from first chunk
+        first_chunk_content = temporal_chunks[0]['content']
+        
+        # Calculate total frames accounting for overlaps
+        total_frames = sum(chunk['content'].shape[0] for chunk in temporal_chunks)
+        if frame_overlap > 0:
+            total_frames -= (len(temporal_chunks) - 1) * frame_overlap
+        
+        # Get spatial dimensions from the stitched chunks (not original input)
+        height = first_chunk_content.shape[1]
+        width = first_chunk_content.shape[2]
+        channels = first_chunk_content.shape[3]
+        
+        print(f"   📏 Temporal stitching dimensions:")
+        print(f"      • Total frames: {total_frames}")
+        print(f"      • Spatial size: {height}×{width}")
+        print(f"      • Channels: {channels}")
+        print(f"      • Chunk sizes: {[chunk['content'].shape for chunk in temporal_chunks]}")
+        
+        # Initialize result tensor with correct dimensions
+        result = torch.zeros(
+            (total_frames, height, width, channels),
+            dtype=first_chunk_content.dtype,
+            device=first_chunk_content.device
+        )
+        
+        current_t = 0
+        for i, chunk_info in enumerate(temporal_chunks):
+            chunk_content = chunk_info['content']
+            chunk_frames = chunk_content.shape[0]
+            
+            if i == 0:
+                # First chunk - place entirely
+                result[current_t:current_t+chunk_frames] = chunk_content
+                current_t += chunk_frames
+            else:
+                # Subsequent chunks - check for last chunk with large overlap
+                is_last_chunk = (i == len(temporal_chunks) - 1)
+                
+                # Get the temporal range for this chunk from temporal_tiles
+                temporal_tile_info = temporal_tiles[i]
+                expected_start = temporal_tile_info[0]
+                actual_overlap = current_t - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
+                
+                if is_last_chunk and actual_overlap > frame_overlap:
+                    # Last chunk with large overlap - use full region fade blending
+                    print(f"🔥 Last chunk: Large overlap detected ({actual_overlap} > {frame_overlap})")
+                    
+                    # Calculate overlap region
+                    overlap_frames = actual_overlap
+                    
+                    # Get regions for blending
+                    result_overlap = result[current_t-overlap_frames:current_t]
+                    chunk_overlap = chunk_content[:overlap_frames]
+                    
+                    # Create temporal fade mask
+                    fade_mask = self._create_temporal_fade_mask(overlap_frames, result_overlap.dtype, result_overlap.device)
+                    
+                    # Apply fade blending across the entire overlap region
+                    blended_overlap = result_overlap * (1.0 - fade_mask) + chunk_overlap * fade_mask
+                    result[current_t-overlap_frames:current_t] = blended_overlap
+                    
+                    # Place the non-overlapping part
+                    if chunk_frames > overlap_frames:
+                        result[current_t:current_t+chunk_frames-overlap_frames] = chunk_content[overlap_frames:]
+                    current_t += chunk_frames - overlap_frames
+                else:
+                    # Normal overlap handling
+                    overlap_frames = min(frame_overlap, chunk_frames // 2, current_t)
+                    
+                    if overlap_frames > 0:
+                        # Get regions for blending
+                        result_overlap = result[current_t-overlap_frames:current_t]
+                        chunk_overlap = chunk_content[:overlap_frames]
+                        
+                        # Create temporal fade mask
+                        fade_mask = self._create_temporal_fade_mask(overlap_frames, result_overlap.dtype, result_overlap.device)
+                        
+                        # Apply fade blending
+                        blended_overlap = result_overlap * (1.0 - fade_mask) + chunk_overlap * fade_mask
+                        result[current_t-overlap_frames:current_t] = blended_overlap
+                        
+                        # Place the non-overlapping part
+                        if chunk_frames > overlap_frames:
+                            result[current_t:current_t+chunk_frames-overlap_frames] = chunk_content[overlap_frames:]
+                        current_t += chunk_frames - overlap_frames
+                    else:
+                        # No overlap - place directly
+                        result[current_t:current_t+chunk_frames] = chunk_content
+                        current_t += chunk_frames
+        
+        return result
+    
+    def _create_temporal_fade_mask(self, fade_size, dtype, device):
+        """Create a temporal fade mask for blending across time dimension."""
+        fade_mask = torch.linspace(0, 1, fade_size, dtype=dtype, device=device)
+        # Shape: (fade_size, 1, 1, 1) for broadcasting
+        return fade_mask.view(fade_size, 1, 1, 1)
     
     def _force_memory_cleanup(self, model, vae):
         """Force memory cleanup between tile processing"""
@@ -2372,16 +2796,16 @@ class TiledWanVideoVACEpipe:
         fade_mask = fade_values.view(overlap_frames, 1, 1, 1)
         return fade_mask
     
-    def _generate_processing_summary(self, processing_info_list, temporal_tiles, spatial_tiles_h, spatial_tiles_w, total_tiles):
-        """Generate comprehensive summary of the tiled processing"""
-        successful_tiles = sum(1 for info in processing_info_list if info['status'] == 'success')
+    def _generate_wanvideo_processing_summary(self, all_tiles, temporal_tiles, spatial_tiles_h, spatial_tiles_w, total_tiles):
+        """Generate comprehensive summary of the WanVideo tiled processing"""
+        successful_tiles = sum(1 for tile in all_tiles if hasattr(tile, 'processing_status') and tile.processing_status == 'success')
         failed_tiles = total_tiles - successful_tiles
         
-        summary = f"=== TILED WANVIDEO VACE PROCESSING SUMMARY ===\n"
+        summary = f"=== DIMENSION-WISE TILED WANVIDEO VACE PROCESSING SUMMARY ===\n"
         summary += f"Total tiles processed: {total_tiles}\n"
-        summary += f"Successful tiles: {successful_tiles}\n"
+        summary += f"Successful WanVideo tiles: {successful_tiles}\n"
         summary += f"Failed tiles: {failed_tiles}\n"
-        summary += f"Success rate: {(successful_tiles/total_tiles)*100:.1f}%\n\n"
+        summary += f"WanVideo success rate: {(successful_tiles/total_tiles)*100:.1f}%\n\n"
         
         summary += f"Temporal chunks: {len(temporal_tiles)}\n"
         for i, (start, end) in enumerate(temporal_tiles):
@@ -2396,14 +2820,26 @@ class TiledWanVideoVACEpipe:
         for i, (start, end) in enumerate(spatial_tiles_w):
             summary += f"  Col {i+1}: pixels {start}-{end-1} ({end-start} pixels)\n"
         
+        # Group tiles by processing status
         if failed_tiles > 0:
-            summary += f"\nFailed tiles:\n"
-            for info in processing_info_list:
-                if info['status'] != 'success':
-                    summary += f"  Chunk {info['temporal_chunk']}, Tile {info['spatial_tile']}: {info['status']}\n"
+            summary += f"\nFailed tiles details:\n"
+            for tile in all_tiles:
+                if hasattr(tile, 'processing_status') and tile.processing_status != 'success':
+                    summary += f"  T{tile.temporal_index}:L{tile.line_index}:C{tile.column_index}: {tile.processing_status}\n"
         
-        summary += f"\nTiled WanVideo VACE processing completed successfully!"
-        summary += f"\nLarge video processed through {total_tiles} individual WanVideo operations."
+        # Add dimension-wise processing information
+        summary += f"\nDimension-wise processing algorithm:\n"
+        summary += f"  1. WanVideo VACE processing: Each tile processed through complete pipeline\n"
+        summary += f"  2. Column-wise stitching: Vertical fade blending within temporal chunks\n"
+        summary += f"  3. Line-wise stitching: Horizontal fade blending across columns\n"
+        summary += f"  4. Temporal stitching: Frame-based fade blending across time\n"
+        summary += f"  5. Cropping: Final video cropped to original input dimensions\n"
+        
+        summary += f"\nLast tiles in each dimension use full-region fade blending for large overlaps\n"
+        summary += f"Output video maintains exact input dimensions while providing seamless transitions\n"
+        
+        summary += f"\nDimension-wise Tiled WanVideo VACE processing completed successfully!"
+        summary += f"\nLarge video processed through {total_tiles} individual WanVideo VACE operations."
         
         return summary
 
