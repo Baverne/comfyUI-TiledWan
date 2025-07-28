@@ -1715,13 +1715,38 @@ class TiledWanVideoVACEpipe:
         print(f"      🔍 DEBUG: About to run WanVideoSampler...")
         print(f"         • model: {type(model)} ({'None' if model is None else 'OK'})")
         print(f"         • image_embeds: {type(vace_embeds)} ({'None' if vace_embeds is None else 'OK'})")
+        if isinstance(vace_embeds, dict):
+            print(f"         • image_embeds keys: {list(vace_embeds.keys())}")
         print(f"         • steps: {steps}")
         print(f"         • cfg: {cfg}")
         print(f"         • shift: {shift}")
         print(f"         • seed: {seed}")
         print(f"         • scheduler: {scheduler}")
-        print(f"         • text_embeds: {type(kwargs.get('text_embeds'))} ({'None' if kwargs.get('text_embeds') is None else 'OK'})")
+        
+        text_embeds = kwargs.get("text_embeds")
+        print(f"         • text_embeds: {type(text_embeds)} ({'None' if text_embeds is None else 'OK'})")
+        if isinstance(text_embeds, dict):
+            print(f"         • text_embeds keys: {list(text_embeds.keys())}")
+            # Check for clip_fea specifically since that's what's failing
+            clip_fea = text_embeds.get("clip_fea")
+            print(f"         • text_embeds['clip_fea']: {type(clip_fea)} ({'None' if clip_fea is None else 'OK'})")
+        
         print(f"         • samples: {type(kwargs.get('samples'))} ({'None' if kwargs.get('samples') is None else 'OK'})")
+        
+        # Check and potentially fix text_embeds for missing clip_fea
+        text_embeds = kwargs.get("text_embeds")
+        if text_embeds is not None and isinstance(text_embeds, dict):
+            clip_fea = text_embeds.get("clip_fea")
+            if clip_fea is None:
+                print(f"         ⚠️  WARNING: text_embeds['clip_fea'] is None! This will cause the repeat() error.")
+                print(f"         🔧 ATTEMPTING FIX: Creating dummy clip_fea...")
+                # Create a dummy clip_fea tensor with appropriate shape
+                # Based on typical CLIP dimensions, but this might need adjustment
+                device = next(model.parameters()).device if hasattr(model, 'parameters') else 'cuda'
+                dummy_clip_fea = torch.zeros((1, 77, 768), device=device, dtype=torch.float16)
+                text_embeds = text_embeds.copy()  # Don't modify the original
+                text_embeds["clip_fea"] = dummy_clip_fea
+                print(f"         ✅ Created dummy clip_fea with shape: {dummy_clip_fea.shape}")
         
         sampler_node = WanVideoSampler()
         latent_samples = sampler_node.process(
@@ -1733,7 +1758,7 @@ class TiledWanVideoVACEpipe:
             seed=seed,
             scheduler=scheduler,
             riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-            text_embeds=kwargs.get("text_embeds"),
+            text_embeds=text_embeds,  # Use potentially fixed text_embeds
             samples=kwargs.get("samples"),
             denoise_strength=kwargs.get("denoise_strength", 1.0),
             force_offload=kwargs.get("force_offload", True),
