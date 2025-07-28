@@ -1760,8 +1760,30 @@ class TiledWanVideoVACEpipe:
             print(f"         🔍 FINAL CHECK: corrected_text_embeds['clip_fea']: {type(final_clip_fea)} ({'None' if final_clip_fea is None else 'OK'})")
             if final_clip_fea is not None and hasattr(final_clip_fea, 'shape'):
                 print(f"         📏 Final clip_fea shape: {final_clip_fea.shape}")
+                print(f"         🔧 Final clip_fea device: {final_clip_fea.device}")
+                print(f"         � Final clip_fea dtype: {final_clip_fea.dtype}")
+            else:
+                print(f"         ❌ CRITICAL: clip_fea is still None after correction attempt!")
+        else:
+            print(f"         ❌ CRITICAL: corrected_text_embeds is not a dict: {type(corrected_text_embeds)}")
         
-        print(f"      🚀 Calling WanVideoSampler.process() with corrected text_embeds...")
+        print(f"      �🚀 Calling WanVideoSampler.process() with corrected text_embeds...")
+        
+        # Explicitly set samples to None since we're not using pre-generated latents
+        # WanVideo should generate initial noise internally when samples=None
+        samples_input = None  # Always None for typical WanVideo usage
+        print(f"         💫 samples input set to: {samples_input} (letting WanVideo generate initial noise)")
+        
+        # Create a fresh copy of corrected_text_embeds to ensure no reference issues
+        if isinstance(corrected_text_embeds, dict):
+            final_text_embeds = {}
+            for key, value in corrected_text_embeds.items():
+                final_text_embeds[key] = value
+            print(f"         🔄 Created fresh copy of text_embeds with keys: {list(final_text_embeds.keys())}")
+            if 'clip_fea' in final_text_embeds and final_text_embeds['clip_fea'] is not None:
+                print(f"         ✅ Fresh copy has valid clip_fea: shape {final_text_embeds['clip_fea'].shape}")
+        else:
+            final_text_embeds = corrected_text_embeds
         
         sampler_node = WanVideoSampler()
         latent_samples = sampler_node.process(
@@ -1773,8 +1795,8 @@ class TiledWanVideoVACEpipe:
             seed=seed,
             scheduler=scheduler,
             riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-            text_embeds=corrected_text_embeds,  # Use corrected text_embeds
-            samples=kwargs.get("samples"),
+            text_embeds=final_text_embeds,  # Use fresh copy of corrected text_embeds
+            samples=samples_input,  # Explicitly None
             denoise_strength=kwargs.get("denoise_strength", 1.0),
             force_offload=kwargs.get("force_offload", True),
             
