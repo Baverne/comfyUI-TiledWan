@@ -1072,12 +1072,13 @@ class TileAndStitchBack:
             
             # STEP 4: Time-wise stitching (stitch temporal chunks together)
             print(f"\n🔸 STEP 4: Time-wise stitching...")
-            final_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, 
-                                                          batch_size, height, width, channels, frame_overlap)
+            # Extract just the content from temporal chunks
+            temporal_strips = [chunk['content'] for chunk in temporal_chunks]
+            final_video = self._stitch_temporal_chunks_new(temporal_strips, temporal_tiles, frame_overlap)
             
             # Generate summary
             tile_info_summary = self._generate_tile_info_summary_new(
-                all_tiles, temporal_tiles, spatial_tiles_h, spatial_tiles_w
+                all_tiles, video.shape, final_video.shape
             )
             
             print(f"✅ Dimension-wise tiling and stitching completed!")
@@ -1331,7 +1332,7 @@ class TileAndStitchBack:
                     blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
                     result[:, :, overlap_start:current_w, :] = blended_region
                 
-            current_w += non_overlap_w
+                current_w += non_overlap_w
             
         return result
     
