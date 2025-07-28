@@ -1680,6 +1680,13 @@ class TiledWanVideoVACEpipe:
         print(f"      🔍 WanVideoSampler Parameters Debug:")
         print(f"         • model: {type(model)} ({'None' if model is None else 'OK'})")
         print(f"         • image_embeds: {type(vace_embeds)} ({'None' if vace_embeds is None else 'OK'})")
+        if isinstance(vace_embeds, dict):
+            print(f"           - image_embeds keys: {list(vace_embeds.keys())}")
+            for key, value in vace_embeds.items():
+                if hasattr(value, 'shape'):
+                    print(f"           - {key}: {type(value)} shape={value.shape}")
+                else:
+                    print(f"           - {key}: {type(value)} ({'None' if value is None else 'OK'})")
         print(f"         • steps: {steps} ({type(steps)})")
         print(f"         • cfg: {cfg} ({type(cfg)})")
         print(f"         • shift: {shift} ({type(shift)})")
