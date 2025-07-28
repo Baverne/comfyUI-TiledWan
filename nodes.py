@@ -1557,6 +1557,7 @@ class TiledWanVideoVACEpipe:
                         
                         # Process tile through WanVideo VACE pipeline
                         try:
+                            print(f"      🔧 Starting WanVideo processing for tile {tile_idx + 1}...")
                             processed_tile, tile_latents = self._process_tile_through_wanvideo(
                                 video_tile, mask_tile, model, vae, 
                                 WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
@@ -1565,6 +1566,7 @@ class TiledWanVideoVACEpipe:
                                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y,
                                 decode_tile_stride_x, decode_tile_stride_y, kwargs
                             )
+                            print(f"      ✅ WanVideo processing completed for tile {tile_idx + 1}!")
                             
                             # Capture debug tile AFTER processing (first tile only)
                             if temporal_idx == 0 and h_idx == 0 and w_idx == 0:
@@ -1622,6 +1624,10 @@ class TiledWanVideoVACEpipe:
                                 
                         except Exception as tile_error:
                             print(f"      ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
+                            print(f"      📋 Error type: {type(tile_error).__name__}")
+                            print(f"      📋 Full traceback:")
+                            import traceback
+                            print(traceback.format_exc())
                             # Use original tile as fallback
                             self._place_tile_with_overlap(chunk_processed, video_tile,
                                                         h_start, h_end, w_start, w_end)
@@ -1706,6 +1712,17 @@ class TiledWanVideoVACEpipe:
         )[0]
         
         # Step 2: Run WanVideoSampler on this tile
+        print(f"      🔍 DEBUG: About to run WanVideoSampler...")
+        print(f"         • model: {type(model)} ({'None' if model is None else 'OK'})")
+        print(f"         • image_embeds: {type(vace_embeds)} ({'None' if vace_embeds is None else 'OK'})")
+        print(f"         • steps: {steps}")
+        print(f"         • cfg: {cfg}")
+        print(f"         • shift: {shift}")
+        print(f"         • seed: {seed}")
+        print(f"         • scheduler: {scheduler}")
+        print(f"         • text_embeds: {type(kwargs.get('text_embeds'))} ({'None' if kwargs.get('text_embeds') is None else 'OK'})")
+        print(f"         • samples: {type(kwargs.get('samples'))} ({'None' if kwargs.get('samples') is None else 'OK'})")
+        
         sampler_node = WanVideoSampler()
         latent_samples = sampler_node.process(
             model=model,
@@ -1740,6 +1757,8 @@ class TiledWanVideoVACEpipe:
             multitalk_embeds=kwargs.get("multitalk_embeds"),
             freeinit_args=kwargs.get("freeinit_args")
         )[0]
+        
+        print(f"      ✅ WanVideoSampler completed successfully for tile!")
         
         # Step 3: Decode latents back to video for this tile
         decode_node = WanVideoDecode()
