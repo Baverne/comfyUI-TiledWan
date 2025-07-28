@@ -1734,19 +1734,34 @@ class TiledWanVideoVACEpipe:
         print(f"         • samples: {type(kwargs.get('samples'))} ({'None' if kwargs.get('samples') is None else 'OK'})")
         
         # Check and potentially fix text_embeds for missing clip_fea
-        text_embeds = kwargs.get("text_embeds")
-        if text_embeds is not None and isinstance(text_embeds, dict):
-            clip_fea = text_embeds.get("clip_fea")
+        original_text_embeds = kwargs.get("text_embeds")
+        corrected_text_embeds = original_text_embeds
+        
+        if original_text_embeds is not None and isinstance(original_text_embeds, dict):
+            clip_fea = original_text_embeds.get("clip_fea")
             if clip_fea is None:
                 print(f"         ⚠️  WARNING: text_embeds['clip_fea'] is None! This will cause the repeat() error.")
                 print(f"         🔧 ATTEMPTING FIX: Creating dummy clip_fea...")
                 # Create a dummy clip_fea tensor with appropriate shape
                 # Based on typical CLIP dimensions, but this might need adjustment
                 device = next(model.parameters()).device if hasattr(model, 'parameters') else 'cuda'
-                dummy_clip_fea = torch.zeros((1, 77, 768), device=device, dtype=torch.float16)
-                text_embeds = text_embeds.copy()  # Don't modify the original
-                text_embeds["clip_fea"] = dummy_clip_fea
-                print(f"         ✅ Created dummy clip_fea with shape: {dummy_clip_fea.shape}")
+                dtype = next(model.parameters()).dtype if hasattr(model, 'parameters') else torch.float16
+                dummy_clip_fea = torch.zeros((1, 77, 768), device=device, dtype=dtype)
+                
+                # Create a corrected copy of text_embeds
+                corrected_text_embeds = original_text_embeds.copy()
+                corrected_text_embeds["clip_fea"] = dummy_clip_fea
+                print(f"         ✅ Created dummy clip_fea with shape: {dummy_clip_fea.shape}, device: {device}, dtype: {dtype}")
+                print(f"         🔧 Updated text_embeds with dummy clip_fea")
+        
+        # Final verification before passing to sampler
+        if isinstance(corrected_text_embeds, dict):
+            final_clip_fea = corrected_text_embeds.get("clip_fea")
+            print(f"         🔍 FINAL CHECK: corrected_text_embeds['clip_fea']: {type(final_clip_fea)} ({'None' if final_clip_fea is None else 'OK'})")
+            if final_clip_fea is not None and hasattr(final_clip_fea, 'shape'):
+                print(f"         📏 Final clip_fea shape: {final_clip_fea.shape}")
+        
+        print(f"      🚀 Calling WanVideoSampler.process() with corrected text_embeds...")
         
         sampler_node = WanVideoSampler()
         latent_samples = sampler_node.process(
@@ -1758,7 +1773,7 @@ class TiledWanVideoVACEpipe:
             seed=seed,
             scheduler=scheduler,
             riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-            text_embeds=text_embeds,  # Use potentially fixed text_embeds
+            text_embeds=corrected_text_embeds,  # Use corrected text_embeds
             samples=kwargs.get("samples"),
             denoise_strength=kwargs.get("denoise_strength", 1.0),
             force_offload=kwargs.get("force_offload", True),
