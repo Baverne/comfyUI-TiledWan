@@ -1062,7 +1062,7 @@ class TileAndStitchBack:
                         
                         # Place tile back (handle overlaps with fade blending)
                         self._place_tile_with_overlap(chunk_processed, tile_transformed, 
-                                                    h_start, h_end, w_start, w_end, color_shift_strength)
+                                                    h_start, h_end, w_start, w_end, spatial_overlap)
                         
                         # Record tile info
                         tile_info = {
@@ -1198,7 +1198,7 @@ class TileAndStitchBack:
         
         return transformed
     
-    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end, color_shift_strength=0.0):
+    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end, spatial_overlap):
         """Place tile into target tensor, handling overlaps with spatial fade blending"""
         tile_h, tile_w = tile.shape[1:3]
         
@@ -1209,7 +1209,7 @@ class TileAndStitchBack:
         if target_region.sum() > 0:
             # Always use production-quality fade blending regardless of color shift strength
             # Color shift is purely for visual debugging and shouldn't affect blending quality
-            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
+            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile, spatial_overlap)
             
             # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
             blended = target_region * (1.0 - fade_mask) + tile * fade_mask
@@ -1219,14 +1219,14 @@ class TileAndStitchBack:
             # (this includes color-shifted tiles when debugging is enabled)
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
     
-    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
+    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile, spatial_overlap):
         """Create a spatial fade mask for smooth blending between tiles"""
         # Create base mask (1.0 = use new tile, 0.0 = use existing)
         mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
         
-        # Define fade distance (how many pixels to fade over)
-        fade_h = min(10, tile_h // 4)  # Fade over 10 pixels or 1/4 of tile height
-        fade_w = min(10, tile_w // 4)  # Fade over 10 pixels or 1/4 of tile width
+        # Define fade distance using spatial_overlap parameter
+        fade_h = min(spatial_overlap, tile_h // 2)  # Fade over spatial_overlap pixels or half tile height
+        fade_w = min(spatial_overlap, tile_w // 2)  # Fade over spatial_overlap pixels or half tile width
         
         # Check which edges have existing content to determine fade direction
         has_top = existing[:, :fade_h, :, :].sum() > 0
@@ -1547,7 +1547,7 @@ class TiledWanVideoVACEpipe:
                             
                             # Place processed tile back with fade blending
                             self._place_tile_with_overlap(chunk_processed, processed_tile,
-                                                        h_start, h_end, w_start, w_end)
+                                                        h_start, h_end, w_start, w_end, spatial_overlap)
                             
                             # Record processing info
                             tile_info = {
@@ -1570,7 +1570,7 @@ class TiledWanVideoVACEpipe:
                             print(f"      ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
                             # Use original tile as fallback
                             self._place_tile_with_overlap(chunk_processed, video_tile,
-                                                        h_start, h_end, w_start, w_end)
+                                                        h_start, h_end, w_start, w_end, spatial_overlap)
                             
                             tile_info = {
                                 'temporal_chunk': temporal_idx,
@@ -1801,7 +1801,7 @@ class TiledWanVideoVACEpipe:
         
         return tiles
     
-    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end):
+    def _place_tile_with_overlap(self, target, tile, h_start, h_end, w_start, w_end, spatial_overlap):
         """Place tile into target tensor, handling overlaps with spatial fade blending"""
         tile_h, tile_w = tile.shape[1:3]
         
@@ -1811,7 +1811,7 @@ class TiledWanVideoVACEpipe:
         # Check if there's existing content (non-zero) in the target area
         if target_region.sum() > 0:
             # Use production-quality fade blending
-            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile)
+            fade_mask = self._create_spatial_fade_mask(tile_h, tile_w, target_region, tile, spatial_overlap)
             
             # Apply fade blending: existing * (1 - fade_mask) + tile * fade_mask
             blended = target_region * (1.0 - fade_mask) + tile * fade_mask
@@ -1820,14 +1820,14 @@ class TiledWanVideoVACEpipe:
             # First tile in this area - place directly
             target[:, h_start:h_start+tile_h, w_start:w_start+tile_w, :] = tile
     
-    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile):
+    def _create_spatial_fade_mask(self, tile_h, tile_w, existing, new_tile, spatial_overlap):
         """Create a spatial fade mask for smooth blending between tiles"""
         # Create base mask (1.0 = use new tile, 0.0 = use existing)
         mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
         
-        # Define fade distance
-        fade_h = min(10, tile_h // 4)
-        fade_w = min(10, tile_w // 4)
+        # Define fade distance using spatial_overlap parameter
+        fade_h = min(spatial_overlap, tile_h // 2)  # Fade over spatial_overlap pixels or half tile height
+        fade_w = min(spatial_overlap, tile_w // 2)  # Fade over spatial_overlap pixels or half tile width
         
         # Check which edges have existing content
         has_top = existing[:, :fade_h, :, :].sum() > 0
