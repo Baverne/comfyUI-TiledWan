@@ -1072,13 +1072,12 @@ class TileAndStitchBack:
             
             # STEP 4: Time-wise stitching (stitch temporal chunks together)
             print(f"\n🔸 STEP 4: Time-wise stitching...")
-            # Extract just the content from temporal chunks
-            temporal_strips = [chunk['content'] for chunk in temporal_chunks]
-            final_video = self._stitch_temporal_chunks_new(temporal_strips, temporal_tiles, frame_overlap)
+            final_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, 
+                                                          batch_size, height, width, channels, frame_overlap)
             
             # Generate summary
             tile_info_summary = self._generate_tile_info_summary_new(
-                all_tiles, video.shape, final_video.shape
+                all_tiles, temporal_tiles, spatial_tiles_h, spatial_tiles_w
             )
             
             print(f"✅ Dimension-wise tiling and stitching completed!")
@@ -1259,26 +1258,61 @@ class TileAndStitchBack:
                 result[:, current_h:current_h+tile_h, :, :] = tile.content
                 current_h += tile_h
             else:
-                # Subsequent tiles - handle overlap with fade blending
-                overlap_start = current_h - spatial_overlap
+                # Subsequent tiles - check for last tile with large overlap
+                is_last_tile = (i == len(column_tiles) - 1)
                 
-                # Place non-overlapping part first
-                non_overlap_h = tile_h - spatial_overlap
-                result[:, current_h:current_h+non_overlap_h, :, :] = tile.content[:, spatial_overlap:, :, :]
+                # Calculate actual overlap by comparing tile positions
+                expected_start = tile.spatial_range_h[0]
+                actual_overlap = current_h - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
                 
-                # Handle overlapping region with fade blending
-                if spatial_overlap > 0:
-                    existing_region = result[:, overlap_start:current_h, :, :]
-                    new_region = tile.content[:, :spatial_overlap, :, :]
+                if is_last_tile and actual_overlap > spatial_overlap:
+                    # Last tile with large overlap - fade across entire overlapping region
+                    print(f"      🔥 Last tile in column: Large overlap detected ({actual_overlap} > {spatial_overlap})")
+                    overlap_start = expected_start
+                    overlap_size = actual_overlap
+                    non_overlap_start = current_h
+                    non_overlap_size = tile_h - actual_overlap
                     
-                    # Create vertical fade mask
-                    fade_mask = self._create_vertical_fade_mask(spatial_overlap, existing_region.dtype, existing_region.device)
+                    # Place non-overlapping part
+                    if non_overlap_size > 0:
+                        result[:, non_overlap_start:non_overlap_start+non_overlap_size, :, :] = \
+                            tile.content[:, actual_overlap:, :, :]
                     
-                    # Apply fade blending
-                    blended = existing_region * (1.0 - fade_mask) + new_region * fade_mask
-                    result[:, overlap_start:current_h, :, :] = blended
-                
-                current_h += non_overlap_h
+                    # Handle large overlapping region with fade blending
+                    if overlap_size > 0:
+                        existing_region = result[:, overlap_start:overlap_start+overlap_size, :, :]
+                        new_region = tile.content[:, :overlap_size, :, :]
+                        
+                        # Create fade mask for entire overlapping region
+                        fade_mask = self._create_vertical_fade_mask(overlap_size, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended = existing_region * (1.0 - fade_mask) + new_region * fade_mask
+                        result[:, overlap_start:overlap_start+overlap_size, :, :] = blended
+                    
+                    current_h += non_overlap_size
+                else:
+                    # Normal tile with standard overlap handling
+                    overlap_start = current_h - spatial_overlap
+                    
+                    # Place non-overlapping part first
+                    non_overlap_h = tile_h - spatial_overlap
+                    result[:, current_h:current_h+non_overlap_h, :, :] = tile.content[:, spatial_overlap:, :, :]
+                    
+                    # Handle overlapping region with fade blending
+                    if spatial_overlap > 0:
+                        existing_region = result[:, overlap_start:current_h, :, :]
+                        new_region = tile.content[:, :spatial_overlap, :, :]
+                        
+                        # Create vertical fade mask
+                        fade_mask = self._create_vertical_fade_mask(spatial_overlap, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended = existing_region * (1.0 - fade_mask) + new_region * fade_mask
+                        result[:, overlap_start:current_h, :, :] = blended
+                    
+                    current_h += non_overlap_h
         
         return result
     
@@ -1313,26 +1347,63 @@ class TileAndStitchBack:
                 result[:, :, current_w:current_w+strip_w, :] = strip_content
                 current_w += strip_w
             else:
-                # Subsequent strips - handle overlap with fade blending
-                overlap_start = current_w - spatial_overlap
+                # Subsequent strips - check for last strip with large overlap
+                is_last_strip = (i == len(strips) - 1)
                 
-                # Place non-overlapping part first
-                non_overlap_w = strip_w - spatial_overlap
-                result[:, :, current_w:current_w+non_overlap_w, :] = strip_content[:, :, spatial_overlap:, :]
+                # Calculate actual overlap by comparing strip positions
+                expected_start = strip['spatial_range_w'][0]
+                actual_overlap = current_w - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
                 
-                # Handle overlapping region with fade blending
-                if spatial_overlap > 0:
-                    existing_region = result[:, :, overlap_start:current_w, :]
-                    new_region = strip_content[:, :, :spatial_overlap, :]
+                if is_last_strip and actual_overlap > spatial_overlap:
+                    # Last strip with large overlap - fade across entire overlapping region
+                    print(f"      🔥 Last strip in line: Large overlap detected ({actual_overlap} > {spatial_overlap})")
+                    overlap_start = expected_start
+                    overlap_size = actual_overlap
+                    non_overlap_start = current_w
+                    non_overlap_size = strip_w - actual_overlap
                     
-                    # Create horizontal fade mask
-                    fade_mask = self._create_horizontal_fade_mask(spatial_overlap, existing_region.dtype, existing_region.device)
+                    # Place non-overlapping part
+                    if non_overlap_size > 0:
+                        result[:, :, non_overlap_start:non_overlap_start+non_overlap_size, :] = \
+                            strip_content[:, :, actual_overlap:, :]
                     
-                    # Apply fade blending
-                    blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
-                    result[:, :, overlap_start:current_w, :] = blended_region
-                
-                current_w += non_overlap_w
+                    # Handle large overlapping region with fade blending
+                    if overlap_size > 0:
+                        existing_region = result[:, :, overlap_start:overlap_start+overlap_size, :]
+                        new_region = strip_content[:, :, :overlap_size, :]
+                        
+                        # Create fade mask for entire overlapping region
+                        fade_mask = self._create_horizontal_fade_mask(overlap_size, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
+                        result[:, :, overlap_start:overlap_start+overlap_size, :] = blended_region
+                    
+                    current_w += non_overlap_size
+                else:
+                    # Normal strip with standard overlap handling
+                    overlap_start = current_w - spatial_overlap
+                    
+                    # Place non-overlapping part first
+                    non_overlap_w = strip_w - spatial_overlap
+                    result[:, :, current_w:current_w+non_overlap_w, :] = strip_content[:, :, spatial_overlap:, :]
+                    
+                    # Handle overlapping region with fade blending
+                    if spatial_overlap > 0:
+                        existing_region = result[:, :, overlap_start:current_w, :]
+                        new_region = strip_content[:, :, :spatial_overlap, :]
+                        
+                        # Create horizontal fade mask
+                        fade_mask = self._create_horizontal_fade_mask(spatial_overlap, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
+                        result[:, :, overlap_start:current_w, :] = blended_region
+                    
+                    current_w += non_overlap_w
+            
+        return result
             
         return result
     
@@ -1348,58 +1419,91 @@ class TileAndStitchBack:
         # Shape: (1, 1, fade_size, 1) for broadcasting
         return fade_mask.view(1, 1, fade_size, 1)
     
-    def _stitch_temporal_chunks_new(self, temporal_strips, tile_info, frame_overlap):
-        """Stitch temporal strips to create the final output with temporal blending."""
-        if not temporal_strips:
+    def _stitch_temporal_chunks_new(self, temporal_chunks, temporal_tiles, 
+                                   total_frames, height, width, channels, frame_overlap):
+        """Stitch temporal chunks to create the final output with temporal blending."""
+        if not temporal_chunks:
             return None
             
-        if len(temporal_strips) == 1:
-            return temporal_strips[0]
+        if len(temporal_chunks) == 1:
+            return temporal_chunks[0]['content']
         
-        # Get dimensions from first strip
-        first_strip = temporal_strips[0]
-        total_frames = sum(strip.shape[0] for strip in temporal_strips)
-        
-        # Account for overlaps
-        if frame_overlap > 0:
-            total_frames -= (len(temporal_strips) - 1) * frame_overlap
+        # Get dimensions from first chunk
+        first_chunk_content = temporal_chunks[0]['content']
         
         # Initialize result tensor
         result = torch.zeros(
-            (total_frames, first_strip.shape[1], first_strip.shape[2], first_strip.shape[3]),
-            dtype=first_strip.dtype,
-            device=first_strip.device
+            (total_frames, height, width, channels),
+            dtype=first_chunk_content.dtype,
+            device=first_chunk_content.device
         )
         
         current_t = 0
-        for i, strip in enumerate(temporal_strips):
-            strip_frames = strip.shape[0]
+        for i, chunk_info in enumerate(temporal_chunks):
+            chunk_content = chunk_info['content']
+            chunk_frames = chunk_content.shape[0]
             
             if i == 0:
-                # First strip - place entirely
-                result[current_t:current_t+strip_frames] = strip
-                current_t += strip_frames
+                # First chunk - place entirely
+                result[current_t:current_t+chunk_frames] = chunk_content
+                current_t += chunk_frames
             else:
-                # Subsequent strips - handle overlap
-                non_overlap_frames = strip_frames - frame_overlap
-                overlap_start = current_t - frame_overlap
+                # Subsequent chunks - check for last chunk with large overlap
+                is_last_chunk = (i == len(temporal_chunks) - 1)
                 
-                # Place non-overlapping part
-                result[current_t:current_t+non_overlap_frames] = strip[frame_overlap:]
+                # Get the temporal range for this chunk from temporal_tiles
+                temporal_tile_info = temporal_tiles[i]
+                expected_start = temporal_tile_info[0]
+                actual_overlap = current_t - expected_start
+                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
                 
-                # Handle overlapping region with temporal fade blending
-                if frame_overlap > 0:
-                    existing_region = result[overlap_start:current_t]
-                    new_region = strip[:frame_overlap]
+                if is_last_chunk and actual_overlap > frame_overlap:
+                    # Last chunk with large overlap - fade across entire overlapping region
+                    print(f"      🔥 Last temporal chunk: Large overlap detected ({actual_overlap} > {frame_overlap})")
+                    overlap_start = expected_start
+                    overlap_size = actual_overlap
+                    non_overlap_start = current_t
+                    non_overlap_size = chunk_frames - actual_overlap
                     
-                    # Create temporal fade mask
-                    fade_mask = self._create_temporal_fade_mask(frame_overlap, existing_region.dtype, existing_region.device)
+                    # Place non-overlapping part
+                    if non_overlap_size > 0:
+                        result[non_overlap_start:non_overlap_start+non_overlap_size] = \
+                            chunk_content[actual_overlap:]
                     
-                    # Apply fade blending
-                    blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
-                    result[overlap_start:current_t] = blended_region
-                
-                current_t += non_overlap_frames
+                    # Handle large overlapping region with fade blending
+                    if overlap_size > 0:
+                        existing_region = result[overlap_start:overlap_start+overlap_size]
+                        new_region = chunk_content[:overlap_size]
+                        
+                        # Create temporal fade mask for entire overlapping region
+                        fade_mask = self._create_temporal_fade_mask(overlap_size, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
+                        result[overlap_start:overlap_start+overlap_size] = blended_region
+                    
+                    current_t += non_overlap_size
+                else:
+                    # Normal chunk with standard overlap handling
+                    non_overlap_frames = chunk_frames - frame_overlap
+                    overlap_start = current_t - frame_overlap
+                    
+                    # Place non-overlapping part
+                    result[current_t:current_t+non_overlap_frames] = chunk_content[frame_overlap:]
+                    
+                    # Handle overlapping region with temporal fade blending
+                    if frame_overlap > 0:
+                        existing_region = result[overlap_start:current_t]
+                        new_region = chunk_content[:frame_overlap]
+                        
+                        # Create temporal fade mask
+                        fade_mask = self._create_temporal_fade_mask(frame_overlap, existing_region.dtype, existing_region.device)
+                        
+                        # Apply fade blending
+                        blended_region = existing_region * (1 - fade_mask) + new_region * fade_mask
+                        result[overlap_start:current_t] = blended_region
+                    
+                    current_t += non_overlap_frames
         
         return result
     
@@ -1409,12 +1513,12 @@ class TileAndStitchBack:
         # Shape: (fade_size, 1, 1, 1) for broadcasting
         return fade_mask.view(fade_size, 1, 1, 1)
     
-    def _generate_tile_info_summary_new(self, tiles, input_shape, output_shape):
+    def _generate_tile_info_summary_new(self, tiles, temporal_tiles, spatial_tiles_h, spatial_tiles_w):
         """Generate a summary of tile processing for the new dimension-wise algorithm."""
         summary_lines = []
         summary_lines.append("=== Tile Processing Summary (Dimension-wise Algorithm) ===")
-        summary_lines.append(f"Input shape: {input_shape}")
-        summary_lines.append(f"Output shape: {output_shape}")
+        summary_lines.append(f"Input video - Temporal chunks: {len(temporal_tiles)}")
+        summary_lines.append(f"Input video - Spatial grid: {len(spatial_tiles_h)}×{len(spatial_tiles_w)}")
         summary_lines.append(f"Total tiles processed: {len(tiles)}")
         
         # Group tiles by temporal chunk
@@ -1440,6 +1544,7 @@ class TileAndStitchBack:
             summary_lines.append(f"  Chunk {t_idx}: {len(line_groups)} lines × {max_cols} columns")
         
         summary_lines.append("Processing order: Column-wise → Line-wise → Temporal")
+        summary_lines.append("Last tiles in each dimension use full-region fade blending")
         summary_lines.append("="*60)
         
         return "\n".join(summary_lines)
