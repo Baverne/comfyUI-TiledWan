@@ -1995,8 +1995,8 @@ class TiledWanVideoVACEpipe:
                 model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
                 steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
-                debug_color_shift, force_offload_between_tiles, debug_mode, kwargs
-            )
+                debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs  # Added frame_overlap here
+)
             
             # STEP 3: Dimension-wise stitching - Column-wise (vertical stitching)
             print(f"\n🔄 STEP 3: Column-wise stitching (vertical)...")
@@ -2047,7 +2047,7 @@ class TiledWanVideoVACEpipe:
                                         model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
                                         steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
                                         decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
-                                        debug_color_shift, force_offload_between_tiles, debug_mode, kwargs):
+                                        debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs):
         """
         Extract all tiles and process through WanVideo VACE pipeline with temporal consistency chain
         """
@@ -2093,7 +2093,8 @@ class TiledWanVideoVACEpipe:
                         # Subsequent chunks: Use corresponding tile from previous chunk as reference
                         if spatial_key in previous_chunk_tiles:
                             previous_tile = previous_chunk_tiles[spatial_key]
-                            
+
+
                             # Extract reference frame: frame_overlap frames before the last frame
                             ref_frame_idx = previous_tile.content.shape[0] - frame_overlap - 1
                             ref_frame_idx = max(0, ref_frame_idx)  # Ensure non-negative
