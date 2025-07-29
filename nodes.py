@@ -1996,7 +1996,7 @@ class TiledWanVideoVACEpipe:
                 steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
                 debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs  # Added frame_overlap here
-)
+            )
             
             # STEP 3: Dimension-wise stitching - Column-wise (vertical stitching)
             print(f"\n🔄 STEP 3: Column-wise stitching (vertical)...")
@@ -2044,17 +2044,17 @@ class TiledWanVideoVACEpipe:
     
     
     def _extract_and_process_wanvideo_tiles(self, video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
-                                        model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
-                                        steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
-                                        decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
-                                        debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs):
+                                      model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                                      steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                                      decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
+                                      debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs):
         """
-        Extract all tiles and process through WanVideo VACE pipeline with temporal consistency chain
+        Extract all tiles and process through WanVideo VACE pipeline with frame-wise temporal consistency
         """
         all_tiles = []
         
-        # Store previous temporal chunk tiles for reference image chaining
-        previous_chunk_tiles = {}  # Key: (h_idx, w_idx), Value: Tile object
+        # Store previous temporal chunk's COMPLETE STITCHED FRAME for reference
+        previous_chunk_stitched_frame = None
         
         for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
             if debug_mode:
@@ -2064,14 +2064,13 @@ class TiledWanVideoVACEpipe:
             video_chunk = video[t_start:t_end]
             mask_chunk = mask[t_start:t_end]
             
-            # Store current chunk tiles for next iteration
-            current_chunk_tiles = {}
+            # Store current chunk tiles for stitching the reference frame
+            current_chunk_tiles = []
             
             # Process each spatial tile within this temporal chunk
             for h_idx, (h_start, h_end) in enumerate(spatial_tiles_h):
                 for w_idx, (w_start, w_end) in enumerate(spatial_tiles_w):
                     tile_idx = len(all_tiles)  # Global tile index
-                    spatial_key = (h_idx, w_idx)
                     
                     if debug_mode:
                         print(f"      🧩 Tile {tile_idx + 1}: T{temporal_idx}:L{h_idx}:C{w_idx} "
@@ -2081,39 +2080,36 @@ class TiledWanVideoVACEpipe:
                     video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
                     mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
                     
-                    # TEMPORAL CONSISTENCY CHAIN: Determine reference image for this tile
+                    # FRAME-WISE TEMPORAL CONSISTENCY: Determine reference image for this tile
                     tile_ref_images = None
                     
                     if temporal_idx == 0:
                         # First temporal chunk: Use user-provided ref_images (if any)
                         tile_ref_images = kwargs.get("vace_ref_images")
-                        if debug_mode and spatial_key == (0, 0):  # Only print once per chunk
+                        if debug_mode and h_idx == 0 and w_idx == 0:  # Only print once per chunk
                             print(f"      🎯 First chunk: Using user-provided ref_images")
                     else:
-                        # Subsequent chunks: Use corresponding tile from previous chunk as reference
-                        if spatial_key in previous_chunk_tiles:
-                            previous_tile = previous_chunk_tiles[spatial_key]
-
-
+                        # Subsequent chunks: Use COMPLETE STITCHED FRAME from previous chunk as reference
+                        if previous_chunk_stitched_frame is not None:
                             # Extract reference frame: frame_overlap frames before the last frame
-                            ref_frame_idx = previous_tile.content.shape[0] - frame_overlap - 1
+                            ref_frame_idx = previous_chunk_stitched_frame.shape[0] - frame_overlap - 1
                             ref_frame_idx = max(0, ref_frame_idx)  # Ensure non-negative
                             
-                            # Extract single frame as reference image
-                            tile_ref_images = previous_tile.content[ref_frame_idx:ref_frame_idx+1]  # Shape: [1, H, W, C]
+                            # Extract single COMPLETE FRAME as reference image
+                            tile_ref_images = previous_chunk_stitched_frame[ref_frame_idx:ref_frame_idx+1]  # Shape: [1, H, W, C]
                             
-                            if debug_mode and spatial_key == (0, 0):  # Only print once per chunk
-                                print(f"      🔗 Temporal chain: Using frame {ref_frame_idx} from previous chunk T{temporal_idx-1}:L{h_idx}:C{w_idx}")
+                            if debug_mode and h_idx == 0 and w_idx == 0:  # Only print once per chunk
+                                print(f"      🔗 Frame-wise temporal chain: Using complete stitched frame {ref_frame_idx} from previous chunk T{temporal_idx-1}")
                                 print(f"         Reference frame shape: {tile_ref_images.shape}")
                         else:
                             # Fallback: Use user-provided ref_images
                             tile_ref_images = kwargs.get("vace_ref_images")
-                            if debug_mode and spatial_key == (0, 0):
-                                print(f"      ⚠️  No previous tile found, using user ref_images as fallback")
+                            if debug_mode and h_idx == 0 and w_idx == 0:
+                                print(f"      ⚠️  No previous stitched frame found, using user ref_images as fallback")
                     
-                    # Process tile through WanVideo VACE pipeline with temporal reference
+                    # Process tile through WanVideo VACE pipeline with frame-wise temporal reference
                     try:
-                        # Create kwargs with tile-specific reference image
+                        # Create kwargs with tile-specific reference image (COMPLETE FRAME)
                         tile_kwargs = kwargs.copy()
                         tile_kwargs["vace_ref_images"] = tile_ref_images
                         
@@ -2141,12 +2137,10 @@ class TiledWanVideoVACEpipe:
                         tile.processing_status = 'success'
                         tile.seed_used = seed + tile_idx
                         tile.latents = tile_latents
-                        tile.ref_frame_source = f"T{temporal_idx-1}:L{h_idx}:C{w_idx}" if temporal_idx > 0 and spatial_key in previous_chunk_tiles else "user_provided"
+                        tile.ref_frame_source = f"complete_frame_T{temporal_idx-1}" if temporal_idx > 0 and previous_chunk_stitched_frame is not None else "user_provided"
                         
                         all_tiles.append(tile)
-                        
-                        # Store this tile for next temporal chunk's reference
-                        current_chunk_tiles[spatial_key] = tile
+                        current_chunk_tiles.append(tile)
                         
                         # Force memory cleanup between tiles if requested
                         if force_offload_between_tiles:
@@ -2173,27 +2167,54 @@ class TiledWanVideoVACEpipe:
                         tile.ref_frame_source = "error_fallback"
                         
                         all_tiles.append(tile)
-                        
-                        # Store fallback tile for reference chain continuity
-                        current_chunk_tiles[spatial_key] = tile
+                        current_chunk_tiles.append(tile)
             
-            # Update previous chunk tiles for next iteration
-            previous_chunk_tiles = current_chunk_tiles
+            # STITCH THE CURRENT CHUNK TO CREATE REFERENCE FOR NEXT CHUNK
+            if debug_mode:
+                print(f"      🔧 Stitching current chunk T{temporal_idx} for next chunk's reference...")
+            
+            # Group current chunk tiles for stitching
+            current_chunk_tiles_for_stitching = [tile for tile in current_chunk_tiles]
+            
+            # Perform dimension-wise stitching for this temporal chunk
+            try:
+                # Step 1: Column-wise stitching
+                column_strips = self._stitch_columns(current_chunk_tiles_for_stitching, spatial_overlap, False)  # No debug for reference stitching
+                
+                # Step 2: Line-wise stitching  
+                temporal_chunks = self._stitch_lines(column_strips, spatial_overlap, False)  # No debug for reference stitching
+                
+                # Get the stitched chunk content (should be only one chunk)
+                if temporal_chunks and len(temporal_chunks) > 0:
+                    current_chunk_stitched = temporal_chunks[0]['content']
+                    
+                    # Store this stitched chunk as reference for next temporal chunk
+                    previous_chunk_stitched_frame = current_chunk_stitched
+                    
+                    if debug_mode:
+                        print(f"      ✅ Chunk T{temporal_idx} stitched for reference: {current_chunk_stitched.shape}")
+                else:
+                    print(f"      ⚠️  Warning: Failed to stitch chunk T{temporal_idx} for reference")
+                    previous_chunk_stitched_frame = None
+                    
+            except Exception as stitching_error:
+                print(f"      ❌ Error stitching chunk T{temporal_idx} for reference: {str(stitching_error)}")
+                previous_chunk_stitched_frame = None
             
             if debug_mode:
-                chain_status = "user_ref" if temporal_idx == 0 else f"chained_from_T{temporal_idx-1}"
+                chain_status = "user_ref" if temporal_idx == 0 else f"complete_frame_from_T{temporal_idx-1}"
                 print(f"      ✅ Temporal chunk {temporal_idx} completed with {chain_status} references")
         
         print(f"   ✅ Extracted and processed {len(all_tiles)} tiles through WanVideo VACE pipeline")
         successful_tiles = sum(1 for tile in all_tiles if tile.processing_status == 'success')
         print(f"   🎯 Success rate: {successful_tiles}/{len(all_tiles)} ({(successful_tiles/len(all_tiles))*100:.1f}%)")
         
-        # Debug: Print temporal consistency chain summary
+        # Debug: Print frame-wise temporal consistency chain summary
         if debug_mode:
-            print(f"   🔗 Temporal consistency chain summary:")
+            print(f"   🖼️  Frame-wise temporal consistency chain summary:")
             print(f"      • Chunk 0: Used user-provided reference images")
             for t_idx in range(1, len(temporal_tiles)):
-                print(f"      • Chunk {t_idx}: Used frame references from Chunk {t_idx-1}")
+                print(f"      • Chunk {t_idx}: Used complete stitched frame from Chunk {t_idx-1}")
         
         return all_tiles
     
