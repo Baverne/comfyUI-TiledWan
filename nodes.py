@@ -2001,7 +2001,7 @@ class TiledWanVideoVACEpipe:
                 model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
                 steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
                 decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
-                debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs  # Added frame_overlap here
+                debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, spatial_overlap, kwargs
             )
             
             # STEP 3: Dimension-wise stitching - Column-wise (vertical stitching)
@@ -2050,10 +2050,10 @@ class TiledWanVideoVACEpipe:
     
     
     def _extract_and_process_wanvideo_tiles(self, video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
-                                      model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
-                                      steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
-                                      decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
-                                      debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, kwargs):
+                                        model, vae, WanVideoVACEEncode, WanVideoSampler, WanVideoDecode,
+                                        steps, cfg, shift, seed, scheduler, vace_strength, vace_start_percent, vace_end_percent,
+                                        decode_enable_vae_tiling, decode_tile_x, decode_tile_y, decode_tile_stride_x, decode_tile_stride_y,
+                                        debug_color_shift, force_offload_between_tiles, debug_mode, frame_overlap, spatial_overlap, kwargs):
         """
         Extract all tiles and process through WanVideo VACE pipeline with frame-wise temporal consistency
         """
@@ -2330,47 +2330,7 @@ class TiledWanVideoVACEpipe:
         
         return shifted_tile
     
-    def _stitch_columns(self, all_tiles, spatial_overlap, debug_mode):
-        """
-        Stitch tiles vertically (same column, same temporal chunk) to create column strips
-        """
-        # Group tiles by temporal_index and column_index
-        column_groups = {}
-        for tile in all_tiles:
-            key = (tile.temporal_index, tile.column_index)
-            if key not in column_groups:
-                column_groups[key] = []
-            column_groups[key].append(tile)
-        
-        # Sort each group by line_index
-        for key in column_groups:
-            column_groups[key].sort(key=lambda t: t.line_index)
-        
-        column_strips = []
-        
-        for (temporal_idx, col_idx), column_tiles in column_groups.items():
-            if debug_mode and temporal_idx == 0:
-                print(f"      🔄 Column {col_idx}: {len(column_tiles)} tiles")
-            
-            # Stitch tiles in this column vertically
-            if len(column_tiles) == 1:
-                column_strip = column_tiles[0].content
-            else:
-                column_strip = self._stitch_tiles_vertically(column_tiles, spatial_overlap)
-            
-            # Store column strip with its position info
-            strip_info = {
-                'content': column_strip,
-                'temporal_index': temporal_idx,
-                'column_index': col_idx,
-                'spatial_range_w': column_tiles[0].spatial_range_w,
-                'spatial_range_h': (column_tiles[0].spatial_range_h[0], column_tiles[-1].spatial_range_h[1])
-            }
-            column_strips.append(strip_info)
-        
-        print(f"   ✅ Created {len(column_strips)} column strips")
-        return column_strips
-    
+
     def _stitch_lines(self, column_strips, spatial_overlap, debug_mode):
         """
         Stitch column strips horizontally (same temporal chunk) to create complete temporal chunks
@@ -2413,6 +2373,48 @@ class TiledWanVideoVACEpipe:
         
         print(f"   ✅ Created {len(temporal_chunks)} temporal chunks")
         return temporal_chunks
+        def _stitch_lines(self, column_strips, spatial_overlap, debug_mode):
+            """
+            Stitch column strips horizontally (same temporal chunk) to create complete temporal chunks
+            """
+            # Group column strips by temporal_index
+            temporal_groups = {}
+            for strip in column_strips:
+                temporal_idx = strip['temporal_index']
+                if temporal_idx not in temporal_groups:
+                    temporal_groups[temporal_idx] = []
+                temporal_groups[temporal_idx].append(strip)
+            
+            # Sort each group by column_index
+            for temporal_idx in temporal_groups:
+                temporal_groups[temporal_idx].sort(key=lambda s: s['column_index'])
+            
+            temporal_chunks = []
+            
+            for temporal_idx, strips in temporal_groups.items():
+                if debug_mode and temporal_idx == 0:
+                    print(f"      🔄 Temporal chunk {temporal_idx}: {len(strips)} strips")
+                
+                # Stitch column strips horizontally
+                if len(strips) == 1:
+                    chunk_content = strips[0]['content']
+                else:
+                    chunk_content = self._stitch_strips_horizontally(strips, spatial_overlap)
+                
+                # Store temporal chunk with its info
+                chunk_info = {
+                    'content': chunk_content,
+                    'temporal_index': temporal_idx,
+                    'spatial_range_h': strips[0]['spatial_range_h'],
+                    'spatial_range_w': (strips[0]['spatial_range_w'][0], strips[-1]['spatial_range_w'][1])
+                }
+                temporal_chunks.append(chunk_info)
+            
+            # Sort by temporal index
+            temporal_chunks.sort(key=lambda c: c['temporal_index'])
+            
+            print(f"   ✅ Created {len(temporal_chunks)} temporal chunks")
+            return temporal_chunks
     
     def _stitch_tiles_vertically(self, column_tiles, spatial_overlap):
         """
