@@ -7,6 +7,12 @@ import os
 import sys
 import importlib
 import traceback
+import math
+import nodes
+import numpy as np
+import torchvision.transforms.functional as F
+from PIL import Image
+from scipy.ndimage import gaussian_filter, grey_dilation, binary_closing, binary_fill_holes
 
 
 class ImageToMask:
@@ -2949,1023 +2955,937 @@ class TiledWanVideoVACEpipe:
         
         return summary
 
-class TiledWanInpaintCrop:
-    """
-    Enhanced Inpaint Crop node with video-aware features:
-    - Maintains maximum crop window across all video frames
-    - Enables batch processing with consistent resolution
-    - Option to disable resize when all frames have same resolution
-    """
-    
-    def __init__(self):
-        pass
+def rescale_i(samples, width, height, algorithm: str):
+    samples = samples.movedim(-1, 1)
+    algorithm = getattr(Image, algorithm.upper())  # i.e. Image.BICUBIC
+    samples_pil: Image.Image = F.to_pil_image(samples[0].cpu()).resize((width, height), algorithm)
+    samples = F.to_tensor(samples_pil).unsqueeze(0)
+    samples = samples.movedim(1, -1)
+    return samples
 
+
+def rescale_m(samples, width, height, algorithm: str):
+    samples = samples.unsqueeze(1)
+    algorithm = getattr(Image, algorithm.upper())  # i.e. Image.BICUBIC
+    samples_pil: Image.Image = F.to_pil_image(samples[0].cpu()).resize((width, height), algorithm)
+    samples = F.to_tensor(samples_pil).unsqueeze(0)
+    samples = samples.squeeze(1)
+    return samples
+
+
+def preresize_imm(image, mask, optional_context_mask, downscale_algorithm, upscale_algorithm, preresize_mode, preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height):
+    current_width, current_height = image.shape[2], image.shape[1]  # Image size [batch, height, width, channels]
+    
+    if preresize_mode == "ensure minimum resolution":
+        if current_width >= preresize_min_width and current_height >= preresize_min_height:
+            return image, mask, optional_context_mask
+
+        scale_factor_min_width = preresize_min_width / current_width
+        scale_factor_min_height = preresize_min_height / current_height
+
+        scale_factor = max(scale_factor_min_width, scale_factor_min_height)
+
+        target_width = int(current_width * scale_factor)
+        target_height = int(current_height * scale_factor)
+
+        image = rescale_i(image, target_width, target_height, upscale_algorithm)
+        mask = rescale_m(mask, target_width, target_height, 'bilinear')
+        optional_context_mask = rescale_m(optional_context_mask, target_width, target_height, 'bilinear')
+        
+        assert target_width >= preresize_min_width and target_height >= preresize_min_height, \
+            f"Internal error: After resizing, target size {target_width}x{target_height} is smaller than min size {preresize_min_width}x{preresize_min_height}"
+
+    elif preresize_mode == "ensure minimum and maximum resolution":
+        if preresize_min_width <= current_width <= preresize_max_width and preresize_min_height <= current_height <= preresize_max_height:
+            return image, mask, optional_context_mask
+
+        scale_factor_min_width = preresize_min_width / current_width
+        scale_factor_min_height = preresize_min_height / current_height
+        scale_factor_min = max(scale_factor_min_width, scale_factor_min_height)
+
+        scale_factor_max_width = preresize_max_width / current_width
+        scale_factor_max_height = preresize_max_height / current_height
+        scale_factor_max = min(scale_factor_max_width, scale_factor_max_height)
+
+        if scale_factor_min > 1 and scale_factor_max < 1:
+            assert False, "Cannot meet both minimum and maximum resolution requirements with aspect ratio preservation."
+        
+        if scale_factor_min > 1:  # We're upscaling to meet min resolution
+            scale_factor = scale_factor_min
+            rescale_algorithm = upscale_algorithm  # Use upscale algorithm for min resolution
+        else:  # We're downscaling to meet max resolution
+            scale_factor = scale_factor_max
+            rescale_algorithm = downscale_algorithm  # Use downscale algorithm for max resolution
+
+        target_width = int(current_width * scale_factor)
+        target_height = int(current_height * scale_factor)
+
+        image = rescale_i(image, target_width, target_height, rescale_algorithm)
+        mask = rescale_m(mask, target_width, target_height, 'nearest') # Always nearest for efficiency
+        optional_context_mask = rescale_m(optional_context_mask, target_width, target_height, 'nearest') # Always nearest for efficiency
+        
+        assert preresize_min_width <= target_width <= preresize_max_width, \
+            f"Internal error: Target width {target_width} is outside the range {preresize_min_width} - {preresize_max_width}"
+        assert preresize_min_height <= target_height <= preresize_max_height, \
+            f"Internal error: Target height {target_height} is outside the range {preresize_min_height} - {preresize_max_height}"
+
+    elif preresize_mode == "ensure maximum resolution":
+        if current_width <= preresize_max_width and current_height <= preresize_max_height:
+            return image, mask, optional_context_mask
+
+        scale_factor_max_width = preresize_max_width / current_width
+        scale_factor_max_height = preresize_max_height / current_height
+        scale_factor_max = min(scale_factor_max_width, scale_factor_max_height)
+
+        target_width = int(current_width * scale_factor_max)
+        target_height = int(current_height * scale_factor_max)
+
+        image = rescale_i(image, target_width, target_height, downscale_algorithm)
+        mask = rescale_m(mask, target_width, target_height, 'nearest')  # Always nearest for efficiency
+        optional_context_mask = rescale_m(optional_context_mask, target_width, target_height, 'nearest')  # Always nearest for efficiency
+
+        assert target_width <= preresize_max_width and target_height <= preresize_max_height, \
+            f"Internal error: Target size {target_width}x{target_height} is greater than max size {preresize_max_width}x{preresize_max_height}"
+
+    return image, mask, optional_context_mask
+
+
+def fillholes_iterative_hipass_fill_m(samples):
+    thresholds = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+
+    mask_np = samples.squeeze(0).cpu().numpy()
+
+    for threshold in thresholds:
+        thresholded_mask = mask_np >= threshold
+        closed_mask = binary_closing(thresholded_mask, structure=np.ones((3, 3)), border_value=1)
+        filled_mask = binary_fill_holes(closed_mask)
+        mask_np = np.maximum(mask_np, np.where(filled_mask != 0, threshold, 0))
+
+    final_mask = torch.from_numpy(mask_np.astype(np.float32)).unsqueeze(0)
+
+    return final_mask
+
+
+def hipassfilter_m(samples, threshold):
+    filtered_mask = samples.clone()
+    filtered_mask[filtered_mask < threshold] = 0
+    return filtered_mask
+
+
+def expand_m(mask, pixels):
+    sigma = pixels / 4
+    mask_np = mask.squeeze(0).cpu().numpy()
+    kernel_size = math.ceil(sigma * 1.5 + 1)
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+    dilated_mask = grey_dilation(mask_np, footprint=kernel)
+    dilated_mask = dilated_mask.astype(np.float32)
+    dilated_mask = torch.from_numpy(dilated_mask)
+    dilated_mask = torch.clamp(dilated_mask, 0.0, 1.0)
+    return dilated_mask.unsqueeze(0)
+
+
+def invert_m(samples):
+    inverted_mask = samples.clone()
+    inverted_mask = 1.0 - inverted_mask
+    return inverted_mask
+
+
+def blur_m(samples, pixels):
+    mask = samples.squeeze(0)
+    sigma = pixels / 4 
+    mask_np = mask.cpu().numpy()
+    blurred_mask = gaussian_filter(mask_np, sigma=sigma)
+    blurred_mask = torch.from_numpy(blurred_mask).float()
+    blurred_mask = torch.clamp(blurred_mask, 0.0, 1.0)
+    return blurred_mask.unsqueeze(0)
+
+
+def extend_imm(image, mask, optional_context_mask, extend_up_factor, extend_down_factor, extend_left_factor, extend_right_factor):
+    B, H, W, C = image.shape
+
+    new_H = int(H * (1.0 + extend_up_factor - 1.0 + extend_down_factor - 1.0))
+    new_W = int(W * (1.0 + extend_left_factor - 1.0 + extend_right_factor - 1.0))
+
+    assert new_H >= 0, f"Error: Trying to crop too much, height ({new_H}) must be >= 0"
+    assert new_W >= 0, f"Error: Trying to crop too much, width ({new_W}) must be >= 0"
+
+    expanded_image = torch.zeros(1, new_H, new_W, C, device=image.device)
+    expanded_mask = torch.ones(1, new_H, new_W, device=mask.device)
+    expanded_optional_context_mask = torch.zeros(1, new_H, new_W, device=optional_context_mask.device)
+
+    up_padding = int(H * (extend_up_factor - 1.0))
+    down_padding = new_H - H - up_padding
+    left_padding = int(W * (extend_left_factor - 1.0))
+    right_padding = new_W - W - left_padding
+
+    slice_target_up = max(0, up_padding)
+    slice_target_down = min(new_H, up_padding + H)
+    slice_target_left = max(0, left_padding)
+    slice_target_right = min(new_W, left_padding + W)
+
+    slice_source_up = max(0, -up_padding)
+    slice_source_down = min(H, new_H - up_padding)
+    slice_source_left = max(0, -left_padding)
+    slice_source_right = min(W, new_W - left_padding)
+
+    image = image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+    expanded_image = expanded_image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+
+    expanded_image[:, :, slice_target_up:slice_target_down, slice_target_left:slice_target_right] = image[:, :, slice_source_up:slice_source_down, slice_source_left:slice_source_right]
+    if up_padding > 0:
+        expanded_image[:, :, :up_padding, slice_target_left:slice_target_right] = image[:, :, 0:1, slice_source_left:slice_source_right].repeat(1, 1, up_padding, 1)
+    if down_padding > 0:
+        expanded_image[:, :, -down_padding:, slice_target_left:slice_target_right] = image[:, :, -1:, slice_source_left:slice_source_right].repeat(1, 1, down_padding, 1)
+    if left_padding > 0:
+        expanded_image[:, :, :, :left_padding] = expanded_image[:, :, :, left_padding:left_padding+1].repeat(1, 1, 1, left_padding)
+    if right_padding > 0:
+        expanded_image[:, :, :, -right_padding:] = expanded_image[:, :, :, -right_padding-1:-right_padding].repeat(1, 1, 1, right_padding)
+
+    expanded_mask[:, slice_target_up:slice_target_down, slice_target_left:slice_target_right] = mask[:, slice_source_up:slice_source_down, slice_source_left:slice_source_right]
+    expanded_optional_context_mask[:, slice_target_up:slice_target_down, slice_target_left:slice_target_right] = optional_context_mask[:, slice_source_up:slice_source_down, slice_source_left:slice_source_right]
+
+    expanded_image = expanded_image.permute(0, 2, 3, 1)  # [B, C, H, W] -> [B, H, W, C]
+    image = image.permute(0, 2, 3, 1)  # [B, C, H, W] -> [B, H, W, C]
+
+    return expanded_image, expanded_mask, expanded_optional_context_mask
+
+
+def debug_context_location_in_image(image, x, y, w, h):
+    debug_image = image.clone()
+    debug_image[:, y:y+h, x:x+w, :] = 1.0 - debug_image[:, y:y+h, x:x+w, :]
+    return debug_image
+
+
+def findcontextarea_m(mask):
+    mask_squeezed = mask[0]  # Now shape is [H, W]
+    non_zero_indices = torch.nonzero(mask_squeezed)
+
+    H, W = mask_squeezed.shape
+
+    if non_zero_indices.numel() == 0:
+        x, y = -1, -1
+        w, h = -1, -1
+    else:
+        y = torch.min(non_zero_indices[:, 0]).item()
+        x = torch.min(non_zero_indices[:, 1]).item()
+        y_max = torch.max(non_zero_indices[:, 0]).item()
+        x_max = torch.max(non_zero_indices[:, 1]).item()
+        w = x_max - x + 1  # +1 to include the max index
+        h = y_max - y + 1  # +1 to include the max index
+
+    context = mask[:, y:y+h, x:x+w]
+    return context, x, y, w, h
+
+
+def growcontextarea_m(context, mask, x, y, w, h, extend_factor):
+    img_h, img_w = mask.shape[1], mask.shape[2]
+
+    # Compute intended growth in each direction
+    grow_left = int(round(w * (extend_factor-1.0) / 2.0))
+    grow_right = int(round(w * (extend_factor-1.0) / 2.0))
+    grow_up = int(round(h * (extend_factor-1.0) / 2.0))
+    grow_down = int(round(h * (extend_factor-1.0) / 2.0))
+
+    # Try to grow left, but clamp at 0
+    new_x = x - grow_left
+    if new_x < 0:
+        new_x = 0
+
+    # Try to grow up, but clamp at 0
+    new_y = y - grow_up
+    if new_y < 0:
+        new_y = 0
+
+    # Right edge
+    new_x2 = x + w + grow_right
+    if new_x2 > img_w:
+        new_x2 = img_w
+
+    # Bottom edge
+    new_y2 = y + h + grow_down
+    if new_y2 > img_h:
+        new_y2 = img_h
+
+    # New width and height
+    new_w = new_x2 - new_x
+    new_h = new_y2 - new_y
+
+    # Extract the context
+    new_context = mask[:, new_y:new_y+new_h, new_x:new_x+new_w]
+
+    if new_h < 0 or new_w < 0:
+        new_x = 0
+        new_y = 0
+        new_w = mask.shape[2]
+        new_h = mask.shape[1]
+
+    return new_context, new_x, new_y, new_w, new_h
+
+
+def combinecontextmask_m(context, mask, x, y, w, h, optional_context_mask):
+    _, x_opt, y_opt, w_opt, h_opt = findcontextarea_m(optional_context_mask)
+    if x == -1:
+        x, y, w, h = x_opt, y_opt, w_opt, h_opt
+    if x_opt == -1:
+        x_opt, y_opt, w_opt, h_opt = x, y, w, h
+    if x == -1:
+        return torch.zeros(1, 0, 0, device=mask.device), -1, -1, -1, -1
+    new_x = min(x, x_opt)
+    new_y = min(y, y_opt)
+    new_x_max = max(x + w, x_opt + w_opt)
+    new_y_max = max(y + h, y_opt + h_opt)
+    new_w = new_x_max - new_x
+    new_h = new_y_max - new_y
+    combined_context = mask[:, new_y:new_y+new_h, new_x:new_x+new_w]
+    return combined_context, new_x, new_y, new_w, new_h
+
+
+def pad_to_multiple(value, multiple):
+    return int(math.ceil(value / multiple) * multiple)
+
+
+def crop_magic_im(image, mask, x, y, w, h, target_w, target_h, padding, downscale_algorithm, upscale_algorithm):
+    image = image.clone()
+    mask = mask.clone()
+    
+    # Ok this is the most complex function in this node. The one that does the magic after all the preparation done by the other nodes.
+    # Basically this function determines the right context area that encompasses the whole context area (mask+optional_context_mask),
+    # that is ideally within the bounds of the original image, and that has the right aspect ratio to match target width and height.
+    # It may grow the image if the aspect ratio wouldn't fit in the original image.
+    # It keeps track of that growing to then be able to crop the image in the stitch node.
+    # Finally, it crops the context area and resizes it to be exactly target_w and target_h.
+    # It keeps track of that resize to be able to revert it in the stitch node.
+
+    # Check for invalid inputs
+    if target_w <= 0 or target_h <= 0 or w == 0 or h == 0:
+        return image, 0, 0, image.shape[2], image.shape[1], image, mask, 0, 0, image.shape[2], image.shape[1]
+
+    # Step 1: Pad target dimensions to be multiples of padding
+    if padding != 0:
+        target_w = pad_to_multiple(target_w, padding)
+        target_h = pad_to_multiple(target_h, padding)
+
+    # Step 2: Calculate target aspect ratio
+    target_aspect_ratio = target_w / target_h
+
+    # Step 3: Grow current context area to meet the target aspect ratio
+    B, image_h, image_w, C = image.shape
+    context_aspect_ratio = w / h
+    if context_aspect_ratio < target_aspect_ratio:
+        # Grow width to meet aspect ratio
+        new_w = int(h * target_aspect_ratio)
+        new_h = h
+        new_x = x - (new_w - w) // 2
+        new_y = y
+
+        # Adjust new_x to keep within bounds
+        if new_x < 0:
+            shift = -new_x
+            if new_x + new_w + shift <= image_w:
+                new_x += shift
+            else:
+                overflow = (new_w - image_w) // 2
+                new_x = -overflow
+        elif new_x + new_w > image_w:
+            overflow = new_x + new_w - image_w
+            if new_x - overflow >= 0:
+                new_x -= overflow
+            else:
+                overflow = (new_w - image_w) // 2
+                new_x = -overflow
+
+    else:
+        # Grow height to meet aspect ratio
+        new_w = w
+        new_h = int(w / target_aspect_ratio)
+        new_x = x
+        new_y = y - (new_h - h) // 2
+
+        # Adjust new_y to keep within bounds
+        if new_y < 0:
+            shift = -new_y
+            if new_y + new_h + shift <= image_h:
+                new_y += shift
+            else:
+                overflow = (new_h - image_h) // 2
+                new_y = -overflow
+        elif new_y + new_h > image_h:
+            overflow = new_y + new_h - image_h
+            if new_y - overflow >= 0:
+                new_y -= overflow
+            else:
+                overflow = (new_h - image_h) // 2
+                new_y = -overflow
+
+    # Step 4: Grow the image to accommodate the new context area
+    up_padding, down_padding, left_padding, right_padding = 0, 0, 0, 0
+
+    expanded_image_w = image_w
+    expanded_image_h = image_h
+
+    # Adjust width for left overflow (x < 0) and right overflow (x + w > image_w)
+    if new_x < 0:
+        left_padding = -new_x
+        expanded_image_w += left_padding
+    if new_x + new_w > image_w:
+        right_padding = (new_x + new_w - image_w)
+        expanded_image_w += right_padding
+    # Adjust height for top overflow (y < 0) and bottom overflow (y + h > image_h)
+    if new_y < 0:
+        up_padding = -new_y
+        expanded_image_h += up_padding 
+    if new_y + new_h > image_h:
+        down_padding = (new_y + new_h - image_h)
+        expanded_image_h += down_padding
+
+    # Step 5: Create the new image and mask
+    expanded_image = torch.zeros((image.shape[0], expanded_image_h, expanded_image_w, image.shape[3]), device=image.device)
+    expanded_mask = torch.ones((mask.shape[0], expanded_image_h, expanded_image_w), device=mask.device)
+
+    # Reorder the tensors to match the required dimension format for padding
+    image = image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+    expanded_image = expanded_image.permute(0, 3, 1, 2)  # [B, H, W, C] -> [B, C, H, W]
+
+    # Ensure the expanded image has enough room to hold the padded version of the original image
+    expanded_image[:, :, up_padding:up_padding + image_h, left_padding:left_padding + image_w] = image
+
+    # Fill the new extended areas with the edge values of the image
+    if up_padding > 0:
+        expanded_image[:, :, :up_padding, left_padding:left_padding + image_w] = image[:, :, 0:1, left_padding:left_padding + image_w].repeat(1, 1, up_padding, 1)
+    if down_padding > 0:
+        expanded_image[:, :, -down_padding:, left_padding:left_padding + image_w] = image[:, :, -1:, left_padding:left_padding + image_w].repeat(1, 1, down_padding, 1)
+    if left_padding > 0:
+        expanded_image[:, :, up_padding:up_padding + image_h, :left_padding] = expanded_image[:, :, up_padding:up_padding + image_h, left_padding:left_padding+1].repeat(1, 1, 1, left_padding)
+    if right_padding > 0:
+        expanded_image[:, :, up_padding:up_padding + image_h, -right_padding:] = expanded_image[:, :, up_padding:up_padding + image_h, -right_padding-1:-right_padding].repeat(1, 1, 1, right_padding)
+
+    # Reorder the tensors back to [B, H, W, C] format
+    expanded_image = expanded_image.permute(0, 2, 3, 1)  # [B, C, H, W] -> [B, H, W, C]
+    image = image.permute(0, 2, 3, 1)  # [B, C, H, W] -> [B, H, W, C]
+
+    # Same for the mask
+    expanded_mask[:, up_padding:up_padding + image_h, left_padding:left_padding + image_w] = mask
+
+    # Record the cto values (canvas to original)
+    cto_x = left_padding
+    cto_y = up_padding
+    cto_w = image_w
+    cto_h = image_h
+
+    # The final expanded image and mask
+    canvas_image = expanded_image
+    canvas_mask = expanded_mask
+
+    # Step 6: Crop the image and mask around x, y, w, h
+    ctc_x = new_x+left_padding
+    ctc_y = new_y+up_padding
+    ctc_w = new_w
+    ctc_h = new_h
+
+    # Crop the image and mask
+    cropped_image = canvas_image[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
+    cropped_mask = canvas_mask[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
+
+    # Step 7: Resize image and mask to the target width and height
+    # Decide which algorithm to use based on the scaling direction
+    if target_w > ctc_w or target_h > ctc_h:  # Upscaling
+        cropped_image = rescale_i(cropped_image, target_w, target_h, upscale_algorithm)
+        cropped_mask = rescale_m(cropped_mask, target_w, target_h, upscale_algorithm)
+    else:  # Downscaling
+        cropped_image = rescale_i(cropped_image, target_w, target_h, downscale_algorithm)
+        cropped_mask = rescale_m(cropped_mask, target_w, target_h, downscale_algorithm)
+
+    return canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h
+
+
+def stitch_magic_im(canvas_image, inpainted_image, mask, ctc_x, ctc_y, ctc_w, ctc_h, cto_x, cto_y, cto_w, cto_h, downscale_algorithm, upscale_algorithm):
+    canvas_image = canvas_image.clone()
+    inpainted_image = inpainted_image.clone()
+    mask = mask.clone()
+
+    # Resize inpainted image and mask to match the context size
+    _, h, w, _ = inpainted_image.shape
+    if ctc_w > w or ctc_h > h:  # Upscaling
+        resized_image = rescale_i(inpainted_image, ctc_w, ctc_h, upscale_algorithm)
+        resized_mask = rescale_m(mask, ctc_w, ctc_h, upscale_algorithm)
+    else:  # Downscaling
+        resized_image = rescale_i(inpainted_image, ctc_w, ctc_h, downscale_algorithm)
+        resized_mask = rescale_m(mask, ctc_w, ctc_h, downscale_algorithm)
+
+    # Clamp mask to [0, 1] and expand to match image channels
+    resized_mask = resized_mask.clamp(0, 1).unsqueeze(-1)  # shape: [1, H, W, 1]
+
+    # Extract the canvas region we're about to overwrite
+    canvas_crop = canvas_image[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w]
+
+    # Blend: new = mask * inpainted + (1 - mask) * canvas
+    blended = resized_mask * resized_image + (1.0 - resized_mask) * canvas_crop
+
+    # Paste the blended region back onto the canvas
+    canvas_image[:, ctc_y:ctc_y + ctc_h, ctc_x:ctc_x + ctc_w] = blended
+
+    # Final crop to get back the original image area
+    output_image = canvas_image[:, cto_y:cto_y + cto_h, cto_x:cto_x + cto_w]
+
+    return output_image
+
+
+class InpaintCropImproved:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
+                # Required inputs
                 "image": ("IMAGE",),
+
+                # Resize algorithms
+                "downscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bilinear"}),
+                "upscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bicubic"}),
+
+                # Pre-resize input image
+                "preresize": ("BOOLEAN", {"default": False, "tooltip": "Resize the original image before processing."}),
+                "preresize_mode": (["ensure minimum resolution", "ensure maximum resolution", "ensure minimum and maximum resolution"], {"default": "ensure minimum resolution"}),
+                "preresize_min_width": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "preresize_max_width": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "preresize_max_height": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
+
+                # Mask manipulation
+                "mask_fill_holes": ("BOOLEAN", {"default": True, "tooltip": "Mark as masked any areas fully enclosed by mask."}),
+                "mask_expand_pixels": ("INT", {"default": 0, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Expand the mask by a certain amount of pixels before processing."}),
+                "mask_invert": ("BOOLEAN", {"default": False,"tooltip": "Invert mask so that anything masked will be kept."}),
+                "mask_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 64, "step": 1, "tooltip": "How many pixels to blend into the original image."}),
+                "mask_hipass_filter": ("FLOAT", {"default": 0.1, "min": 0, "max": 1, "step": 0.01, "tooltip": "Ignore mask values lower than this value."}),
+
+                # Extend image for outpainting
+                "extend_for_outpainting": ("BOOLEAN", {"default": False, "tooltip": "Extend the image for outpainting."}),
+                "extend_up_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_down_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_left_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+
+                # Context
+                "context_from_mask_extend_factor": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 100.0, "step": 0.01, "tooltip": "Grow the context area from the mask by a certain factor in every direction. For example, 1.5 grabs extra 50% up, down, left, and right as context."}),
+
+                # Output
+                "output_resize_to_target_size": ("BOOLEAN", {"default": True, "tooltip": "Force a specific resolution for sampling."}),
+                "output_target_width": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "output_target_height": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "output_padding": (["0", "8", "16", "32", "64", "128", "256", "512"], {"default": "32"}),
+           },
+           "optional": {
+                # Optional inputs
                 "mask": ("MASK",),
-                "context_expand_factor": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 3.0, "step": 0.1}),
-                "context_expand_pixels": ("INT", {"default": 0, "min": 0, "max": 500, "step": 1}),
-                "target_w": ("INT", {"default": 512, "min": 64, "max": 8192, "step": 8}),
-                "target_h": ("INT", {"default": 512, "min": 64, "max": 8192, "step": 8}),
-                "video_mode": ("BOOLEAN", {"default": True, "label_on": "Video Mode", "label_off": "Single Image"}),
-                "force_max_window": ("BOOLEAN", {"default": True, "label_on": "Maximum Window", "label_off": "Per-Frame Window"}),
-                "disable_resize_for_video": ("BOOLEAN", {"default": True, "label_on": "Skip Resize", "label_off": "Always Resize"}),
-                
-                # Pre-resize options
-                "preresize_mode": (["disabled", "ensure minimum resolution", "ensure maximum resolution", "ensure minimum and maximum resolution"], {"default": "disabled"}),
-                "preresize_min_width": ("INT", {"default": 512, "min": 64, "max": 8192, "step": 8}),
-                "preresize_min_height": ("INT", {"default": 512, "min": 64, "max": 8192, "step": 8}),
-                "preresize_max_width": ("INT", {"default": 2048, "min": 64, "max": 8192, "step": 8}),
-                "preresize_max_height": ("INT", {"default": 2048, "min": 64, "max": 8192, "step": 8}),
-                "upscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos"], {"default": "bicubic"}),
-                "downscale_algorithm": (["nearest", "bilinear", "bicubic", "area"], {"default": "area"}),
-                
-                # Mask processing
-                "mask_fill_holes": ("BOOLEAN", {"default": True}),
-                "mask_expand": ("INT", {"default": 10, "min": 0, "max": 100, "step": 1}),
-                "mask_invert": ("BOOLEAN", {"default": False}),
-                "mask_blur": ("INT", {"default": 4, "min": 0, "max": 50, "step": 1}),
-                "mask_hipass_filter": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                
-                # Edge handling
-                "edge_fill_mode": (["repeat_edge", "mirror", "constant"], {"default": "repeat_edge"}),
-                "constant_fill_value": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
-            },
-            "optional": {
                 "optional_context_mask": ("MASK",),
-            },
+           }
         }
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STITCHER", "STRING")
-    RETURN_NAMES = ("cropped_image", "cropped_mask", "stitcher", "crop_info")
-    FUNCTION = "crop_for_inpainting"
-    OUTPUT_NODE = True
-    CATEGORY = "TiledWan"
+    FUNCTION = "inpaint_crop"
+    CATEGORY = "inpaint"
+    DESCRIPTION = "Crops an image around a mask for inpainting, the optional context mask defines an extra area to keep for the context."
 
-    def crop_for_inpainting(self, image, mask, context_expand_factor, context_expand_pixels, target_w, target_h,
-                          video_mode, force_max_window, disable_resize_for_video, preresize_mode, 
-                          preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height,
-                          upscale_algorithm, downscale_algorithm, mask_fill_holes, mask_expand, mask_invert,
-                          mask_blur, mask_hipass_filter, edge_fill_mode, constant_fill_value, optional_context_mask=None):
-        """
-        Enhanced inpaint crop with video-aware features
-        """
-        
-        print("\n" + "="*80)
-        print("           TILEDWAN INPAINT CROP IMPROVED (VIDEO-AWARE)")
-        print("="*80)
-        print("🔍 Starting enhanced inpaint crop with video features...")
-        
-        try:
-            batch_size, height, width, channels = image.shape
-            print(f"📹 Input: {image.shape} ({'Video' if video_mode and batch_size > 1 else 'Image'})")
-            print(f"🎭 Mask: {mask.shape}")
-            print(f"🎯 Target: {target_w}×{target_h}")
-            print(f"📏 Video mode: {video_mode}")
-            print(f"🔒 Force max window: {force_max_window}")
-            print(f"🚫 Disable resize: {disable_resize_for_video}")
-            
-            # Step 1: Pre-resize if needed
-            if preresize_mode != "disabled":
-                print(f"\n📐 Step 1: Pre-resize ({preresize_mode})...")
-                image, mask, optional_context_mask = self._preresize_imm(
-                    image, mask, optional_context_mask, downscale_algorithm, upscale_algorithm,
-                    preresize_mode, preresize_min_width, preresize_min_height, 
-                    preresize_max_width, preresize_max_height
-                )
-                batch_size, height, width, channels = image.shape
-                print(f"✅ After pre-resize: {image.shape}")
-            
-            # Step 2: Process masks for all frames
-            print(f"\n🎭 Step 2: Processing masks...")
-            processed_masks = []
-            
-            for frame_idx in range(batch_size):
-                frame_mask = mask[frame_idx]
-                
-                # Apply mask processing pipeline
-                processed_mask = self._process_mask(
-                    frame_mask, mask_fill_holes, mask_expand, mask_invert, 
-                    mask_blur, mask_hipass_filter
-                )
-                processed_masks.append(processed_mask)
-            
-            processed_masks = torch.stack(processed_masks, dim=0)
-            print(f"✅ Processed {batch_size} masks")
-            
-            # Step 3: Find context areas for all frames
-            print(f"\n📦 Step 3: Finding context areas...")
-            
-            if video_mode and force_max_window and batch_size > 1:
-                # VIDEO MODE: Find maximum window across all frames
-                print("🎬 Video mode: Finding maximum window across all frames...")
-                
-                all_context_areas = []
-                for frame_idx in range(batch_size):
-                    frame_mask = processed_masks[frame_idx]
-                    
-                    # Find context area for this frame
-                    context_area = self._find_context_area(frame_mask)
-                    if context_area is not None:
-                        all_context_areas.append(context_area)
-                
-                if not all_context_areas:
-                    raise ValueError("No valid mask regions found in any frame")
-                
-                # Find the maximum bounding box across all frames
-                min_x = min(area['x'] for area in all_context_areas)
-                min_y = min(area['y'] for area in all_context_areas)
-                max_x = max(area['x'] + area['w'] for area in all_context_areas)
-                max_y = max(area['y'] + area['h'] for area in all_context_areas)
-                
-                max_context = {
-                    'x': min_x,
-                    'y': min_y, 
-                    'w': max_x - min_x,
-                    'h': max_y - min_y
-                }
-                
-                print(f"📊 Individual context areas: {len(all_context_areas)} frames")
-                print(f"📐 Maximum context area: x={max_context['x']}, y={max_context['y']}, w={max_context['w']}, h={max_context['h']}")
-                
-                # Expand the maximum context area
-                expanded_context = self._expand_context_area(
-                    max_context, height, width, context_expand_factor, context_expand_pixels
-                )
-                
-                # Apply the same expanded context to all frames
-                context_areas = [expanded_context] * batch_size
-                
-            else:
-                # SINGLE IMAGE MODE or per-frame processing
-                print("🖼️ Single image mode: Processing each frame independently...")
-                
-                context_areas = []
-                for frame_idx in range(batch_size):
-                    frame_mask = processed_masks[frame_idx]
-                    
-                    # Find and expand context area for this frame
-                    context_area = self._find_context_area(frame_mask)
-                    if context_area is None:
-                        raise ValueError(f"No valid mask region found in frame {frame_idx}")
-                    
-                    expanded_context = self._expand_context_area(
-                        context_area, height, width, context_expand_factor, context_expand_pixels
-                    )
-                    context_areas.append(expanded_context)
-            
-            # Step 4: Adjust for target aspect ratio and handle bounds
-            print(f"\n🎯 Step 4: Adjusting for target aspect ratio...")
-            
-            target_aspect = target_w / target_h
-            adjusted_contexts = []
-            
-            for context in context_areas:
-                adjusted_context = self._adjust_for_aspect_ratio(context, target_aspect)
-                adjusted_contexts.append(adjusted_context)
-            
-            # If video mode with max window, use the largest adjusted context for all
-            if video_mode and force_max_window and batch_size > 1:
-                # Find the largest adjusted context
-                largest_area = 0
-                largest_context = None
-                
-                for context in adjusted_contexts:
-                    area = context['w'] * context['h']
-                    if area > largest_area:
-                        largest_area = area
-                        largest_context = context
-                
-                adjusted_contexts = [largest_context] * batch_size
-                print(f"🔒 Using largest adjusted context for all frames: {largest_context['w']}×{largest_context['h']}")
-            
-            # Step 5: Handle canvas expansion if needed
-            print(f"\n🖼️ Step 5: Handling canvas expansion...")
-            
-            # Check if any context goes outside image bounds
-            needs_expansion = False
-            max_left = max_top = max_right = max_bottom = 0
-            
-            for context in adjusted_contexts:
-                if context['x'] < 0:
-                    max_left = max(max_left, -context['x'])
-                    needs_expansion = True
-                if context['y'] < 0:
-                    max_top = max(max_top, -context['y'])
-                    needs_expansion = True
-                if context['x'] + context['w'] > width:
-                    max_right = max(max_right, context['x'] + context['w'] - width)
-                    needs_expansion = True
-                if context['y'] + context['h'] > height:
-                    max_bottom = max(max_bottom, context['y'] + context['h'] - height)
-                    needs_expansion = True
-            
-            if needs_expansion:
-                print(f"🔧 Canvas expansion needed: L={max_left}, T={max_top}, R={max_right}, B={max_bottom}")
-                
-                # Create expanded canvas
-                expanded_image, expanded_masks, canvas_info = self._create_expanded_canvas(
-                    image, processed_masks, max_left, max_top, max_right, max_bottom, 
-                    edge_fill_mode, constant_fill_value
-                )
-                
-                # Adjust context coordinates for expanded canvas
-                for context in adjusted_contexts:
-                    context['x'] += max_left
-                    context['y'] += max_top
-                
-                working_image = expanded_image
-                working_masks = expanded_masks
-                canvas_offset = (max_left, max_top)
-                
-                print(f"✅ Canvas expanded to: {working_image.shape}")
-            else:
-                working_image = image
-                working_masks = processed_masks
-                canvas_offset = (0, 0)
-                canvas_info = None
-                print("✅ No canvas expansion needed")
-            
-            # Step 6: Crop all frames using their context areas
-            print(f"\n✂️ Step 6: Cropping frames...")
-            
-            cropped_images = []
-            cropped_masks = []
-            crop_contexts = []
-            
-            for frame_idx in range(batch_size):
-                context = adjusted_contexts[frame_idx]
-                
-                # Crop image and mask
-                frame_image = working_image[frame_idx]
-                frame_mask = working_masks[frame_idx]
-                
-                cropped_image = frame_image[context['y']:context['y']+context['h'], 
-                                          context['x']:context['x']+context['w']]
-                cropped_mask = frame_mask[context['y']:context['y']+context['h'], 
-                                        context['x']:context['x']+context['w']]
-                
-                cropped_images.append(cropped_image)
-                cropped_masks.append(cropped_mask)
-                crop_contexts.append(context.copy())
-            
-            cropped_images = torch.stack(cropped_images, dim=0)
-            cropped_masks = torch.stack(cropped_masks, dim=0)
-            
-            print(f"✅ Cropped to: {cropped_images.shape}")
-            
-            # Step 7: Resize if needed (with video-aware logic)
-            print(f"\n🔄 Step 7: Resize decision...")
-            
-            current_h, current_w = cropped_images.shape[1:3]
-            needs_resize = (current_w != target_w or current_h != target_h)
-            
-            should_resize = needs_resize
-            
-            if video_mode and disable_resize_for_video and batch_size > 1:
-                if force_max_window:
-                    # In video mode with max window, all frames have same size
-                    print(f"🚫 Video mode: Skipping resize (all frames same size: {current_w}×{current_h})")
-                    should_resize = False
-                else:
-                    print(f"⚠️ Video mode: Per-frame contexts may have different sizes, resize may be needed")
-            
-            if should_resize:
-                print(f"🔄 Resizing from {current_w}×{current_h} to {target_w}×{target_h}")
-                
-                # Resize images
-                resized_images = torch.nn.functional.interpolate(
-                    cropped_images.permute(0, 3, 1, 2), 
-                    size=(target_h, target_w), 
-                    mode='bilinear' if upscale_algorithm == 'bilinear' else 'bicubic'
-                ).permute(0, 2, 3, 1)
-                
-                # Resize masks
-                resized_masks = torch.nn.functional.interpolate(
-                    cropped_masks.unsqueeze(1), 
-                    size=(target_h, target_w), 
-                    mode='nearest'
-                ).squeeze(1)
-                
-                final_images = resized_images
-                final_masks = resized_masks
-                resize_info = {'from': (current_w, current_h), 'to': (target_w, target_h)}
-            else:
-                final_images = cropped_images
-                final_masks = cropped_masks
-                resize_info = None
-                print(f"✅ No resize needed")
-            
-            # Step 8: Create stitcher data
-            print(f"\n📦 Step 8: Creating stitcher data...")
-            
-            stitcher = self._create_stitcher_data(
-                image, working_image, final_images, final_masks, 
-                crop_contexts, canvas_info, canvas_offset, resize_info,
-                upscale_algorithm, downscale_algorithm, video_mode, force_max_window
-            )
-            
-            # Step 9: Generate crop info
-            crop_info = self._generate_crop_info(
-                image.shape, final_images.shape, crop_contexts, canvas_info, 
-                resize_info, video_mode, force_max_window
-            )
-            
-            print(f"✅ Enhanced inpaint crop completed!")
-            print(f"📤 Output: {final_images.shape}")
-            print(f"🎭 Masks: {final_masks.shape}")
-            print(f"📊 Video features: {'Max window across frames' if video_mode and force_max_window else 'Per-frame processing'}")
-            print("="*80 + "\n")
-            
-            return (final_images, final_masks, stitcher, crop_info)
-            
-        except Exception as e:
-            print(f"❌ Error in enhanced inpaint crop: {str(e)}")
-            import traceback
-            print(f"📋 Traceback: {traceback.format_exc()}")
-            print("="*80 + "\n")
-            
-            # Return original inputs in case of error
-            dummy_stitcher = {"error": str(e)}
-            error_info = f"Error in crop processing: {str(e)}"
-            return (image, mask, dummy_stitcher, error_info)
+
+    # Remove the following # to turn on debug mode (extra outputs, print statements)
+    #'''
+    DEBUG_MODE = False
+    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK")
+    RETURN_NAMES = ("stitcher", "cropped_image", "cropped_mask")
+
+    '''
     
-    def _preresize_imm(self, image, mask, optional_context_mask, downscale_algorithm, upscale_algorithm,
-                       preresize_mode, preresize_min_width, preresize_min_height, 
-                       preresize_max_width, preresize_max_height):
-        """Pre-resize logic adapted from the original inpaint crop and stitch"""
-        # [Implementation matches the original inpaint_cropandstitch.py logic]
-        # This would be the exact same logic as shown in your original file
-        # I'll implement the key parts:
+    DEBUG_MODE = True # TODO
+    RETURN_TYPES = ("STITCHER", "IMAGE", "MASK",
+        # DEBUG
+        "IMAGE",
+        "MASK",
+        "MASK",
+        "MASK",
+        "MASK",
+        "MASK",
+        "MASK",
+        "IMAGE",
+        "MASK",
+        "MASK",
+        "IMAGE",
+        "MASK",
+        "IMAGE",
+        "MASK",
+        "IMAGE",
+        "MASK",
+        "IMAGE",
+        "IMAGE",
+        "MASK",
+        "IMAGE",
+        "IMAGE",
+        "IMAGE",
+        "MASK",
+    )
+    RETURN_NAMES = ("stitcher", "cropped_image", "cropped_mask",
+        # DEBUG
+        "DEBUG_preresize_image",
+        "DEBUG_preresize_mask",
+        "DEBUG_fillholes_mask",
+        "DEBUG_expand_mask",
+        "DEBUG_invert_mask",
+        "DEBUG_blur_mask",
+        "DEBUG_hipassfilter_mask",
+        "DEBUG_extend_image",
+        "DEBUG_extend_mask",
+        "DEBUG_context_from_mask",
+        "DEBUG_context_from_mask_location",
+        "DEBUG_context_expand",
+        "DEBUG_context_expand_location",
+        "DEBUG_context_with_context_mask",
+        "DEBUG_context_with_context_mask_location",
+        "DEBUG_context_to_target",
+        "DEBUG_context_to_target_location",
+        "DEBUG_context_to_target_image",
+        "DEBUG_context_to_target_mask",
+        "DEBUG_canvas_image",
+        "DEBUG_orig_in_canvas_location",
+        "DEBUG_cropped_in_canvas_location",
+        "DEBUG_cropped_mask_blend",
+    )
+    #'''
+
+ 
+    def inpaint_crop(self, image, downscale_algorithm, upscale_algorithm, preresize, preresize_mode, preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height, extend_for_outpainting, extend_up_factor, extend_down_factor, extend_left_factor, extend_right_factor, mask_hipass_filter, mask_fill_holes, mask_expand_pixels, mask_invert, mask_blend_pixels, context_from_mask_extend_factor, output_resize_to_target_size, output_target_width, output_target_height, output_padding, mask=None, optional_context_mask=None):
+        image = image.clone()
+        if mask is not None:
+            mask = mask.clone()
+        if optional_context_mask is not None:
+            optional_context_mask = optional_context_mask.clone()
+
+        output_padding = int(output_padding)
         
-        current_width, current_height = image.shape[2], image.shape[1]
-        
-        def rescale_i(img, target_w, target_h, algorithm):
-            mode = 'bilinear' if algorithm == 'bilinear' else 'bicubic'
-            return torch.nn.functional.interpolate(
-                img.permute(0, 3, 1, 2), size=(target_h, target_w), mode=mode
-            ).permute(0, 2, 3, 1)
-        
-        def rescale_m(msk, target_w, target_h, algorithm):
-            return torch.nn.functional.interpolate(
-                msk.unsqueeze(1), size=(target_h, target_w), mode='nearest'
-            ).squeeze(1)
-        
-        if preresize_mode == "disabled":
-            return image, mask, optional_context_mask
-        
-        # [Implement the full pre-resize logic here following the original pattern]
-        # For brevity, I'm showing the structure - the full implementation would follow
-        # the exact same logic as your original inpaint_cropandstitch.py
-        
-        return image, mask, optional_context_mask
+        # Check that some parameters make sense
+        if preresize and preresize_mode == "ensure minimum and maximum resolution":
+            assert preresize_max_width >= preresize_min_width, "Preresize maximum width must be greater than or equal to minimum width"
+            assert preresize_max_height >= preresize_min_height, "Preresize maximum height must be greater than or equal to minimum height"
+
+        if self.DEBUG_MODE:
+            print('Inpaint Crop Batch input')
+            print(image.shape, type(image), image.dtype)
+            if mask is not None:
+                print(mask.shape, type(mask), mask.dtype)
+            if optional_context_mask is not None:
+                print(optional_context_mask.shape, type(optional_context_mask), optional_context_mask.dtype)
+
+        if image.shape[0] > 1:
+            assert output_resize_to_target_size, "output_resize_to_target_size must be enabled when input is a batch of images, given all images in the batch output have to be the same size"
+
+        # When a LoadImage node passes a mask without user editing, it may be the wrong shape.
+        # Detect and fix that to avoid shape mismatch errors.
+        if mask is not None and (image.shape[0] == 1 or mask.shape[0] == 1 or mask.shape[0] == image.shape[0]):
+            if mask.shape[1] != image.shape[1] or mask.shape[2] != image.shape[2]:
+                if torch.count_nonzero(mask) == 0:
+                    mask = torch.zeros((mask.shape[0], image.shape[1], image.shape[2]), device=image.device, dtype=image.dtype)
+
+        if optional_context_mask is not None and (image.shape[0] == 1 or optional_context_mask.shape[0] == 1 or optional_context_mask.shape[0] == image.shape[0]):
+            if optional_context_mask.shape[1] != image.shape[1] or optional_context_mask.shape[2] != image.shape[2]:
+                if torch.count_nonzero(optional_context_mask) == 0:
+                    optional_context_mask = torch.zeros((optional_context_mask.shape[0], image.shape[1], image.shape[2]), device=image.device, dtype=image.dtype)
+
+        # If no mask is provided, create one with the shape of the image
+        if mask is None:
+            mask = torch.zeros_like(image[:, :, :, 0])
     
-    def _process_mask(self, mask, fill_holes, expand, invert, blur, hipass_filter):
-        """Process a single mask through the pipeline"""
-        processed = mask.clone()
-        
-        # Fill holes
-        if fill_holes:
-            # Simple hole filling (you'd implement proper morphological operations)
-            processed = torch.clamp(processed, 0, 1)
-        
-        # Expand
-        if expand > 0:
-            # Implement mask expansion (erosion/dilation)
-            kernel_size = expand * 2 + 1
-            padding = expand
-            processed = torch.nn.functional.max_pool2d(
-                processed.unsqueeze(0).unsqueeze(0), 
-                kernel_size=kernel_size, stride=1, padding=padding
-            ).squeeze(0).squeeze(0)
-        
-        # Invert
-        if invert:
-            processed = 1.0 - processed
-        
-        # Blur
-        if blur > 0:
-            # Implement gaussian blur
-            processed = torch.nn.functional.conv2d(
-                processed.unsqueeze(0).unsqueeze(0),
-                self._get_gaussian_kernel(blur).to(processed.device),
-                padding=blur
-            ).squeeze(0).squeeze(0)
-        
-        # Hipass filter
-        if hipass_filter > 0:
-            processed = torch.where(processed > hipass_filter, processed, torch.zeros_like(processed))
-        
-        return processed
-    
-    def _get_gaussian_kernel(self, kernel_size):
-        """Create a Gaussian kernel for blurring"""
-        sigma = kernel_size / 3.0
-        kernel = torch.zeros(1, 1, kernel_size*2+1, kernel_size*2+1)
-        
-        for i in range(kernel_size*2+1):
-            for j in range(kernel_size*2+1):
-                x, y = i - kernel_size, j - kernel_size
-                kernel[0, 0, i, j] = torch.exp(-(x*x + y*y) / (2*sigma*sigma))
-        
-        return kernel / kernel.sum()
-    
-    def _find_context_area(self, mask):
-        """Find the bounding box of the mask"""
-        if mask.sum() == 0:
-            return None
-        
-        # Find non-zero regions
-        nonzero_indices = torch.nonzero(mask > 0.5, as_tuple=False)
-        
-        if len(nonzero_indices) == 0:
-            return None
-        
-        min_y = nonzero_indices[:, 0].min().item()
-        max_y = nonzero_indices[:, 0].max().item()
-        min_x = nonzero_indices[:, 1].min().item()
-        max_x = nonzero_indices[:, 1].max().item()
-        
-        return {
-            'x': min_x,
-            'y': min_y,
-            'w': max_x - min_x + 1,
-            'h': max_y - min_y + 1
-        }
-    
-    def _expand_context_area(self, context, img_height, img_width, expand_factor, expand_pixels):
-        """Expand the context area by factor and/or pixels"""
-        # Expand by factor
-        center_x = context['x'] + context['w'] // 2
-        center_y = context['y'] + context['h'] // 2
-        
-        new_w = int(context['w'] * expand_factor)
-        new_h = int(context['h'] * expand_factor)
-        
-        # Expand by pixels
-        new_w += expand_pixels * 2
-        new_h += expand_pixels * 2
-        
-        # Center the expanded area
-        new_x = center_x - new_w // 2
-        new_y = center_y - new_h // 2
-        
-        return {
-            'x': new_x,
-            'y': new_y,
-            'w': new_w,
-            'h': new_h
-        }
-    
-    def _adjust_for_aspect_ratio(self, context, target_aspect):
-        """Adjust context area to match target aspect ratio"""
-        current_aspect = context['w'] / context['h']
-        
-        if current_aspect < target_aspect:
-            # Need to expand width
-            new_w = int(context['h'] * target_aspect)
-            expand_w = new_w - context['w']
-            new_x = context['x'] - expand_w // 2
-            
-            return {
-                'x': new_x,
-                'y': context['y'],
-                'w': new_w,
-                'h': context['h']
-            }
-        else:
-            # Need to expand height
-            new_h = int(context['w'] / target_aspect)
-            expand_h = new_h - context['h']
-            new_y = context['y'] - expand_h // 2
-            
-            return {
-                'x': context['x'],
-                'y': new_y,
-                'w': context['w'],
-                'h': new_h
-            }
-    
-    def _create_expanded_canvas(self, image, masks, left, top, right, bottom, fill_mode, fill_value):
-        """Create expanded canvas with edge filling"""
-        batch_size, height, width, channels = image.shape
-        new_height = height + top + bottom
-        new_width = width + left + right
-        
-        # Create expanded image
-        expanded_image = torch.zeros(batch_size, new_height, new_width, channels, 
-                                   dtype=image.dtype, device=image.device)
-        
-        if fill_mode == "constant":
-            expanded_image.fill_(fill_value)
-        
-        # Place original image in center
-        expanded_image[:, top:top+height, left:left+width, :] = image
-        
-        # Fill edges based on fill mode
-        if fill_mode == "repeat_edge":
-            # Top edge
-            if top > 0:
-                expanded_image[:, :top, left:left+width, :] = image[:, 0:1, :, :].repeat(1, top, 1, 1)
-            # Bottom edge
-            if bottom > 0:
-                expanded_image[:, top+height:, left:left+width, :] = image[:, -1:, :, :].repeat(1, bottom, 1, 1)
-            # Left edge
-            if left > 0:
-                expanded_image[:, :, :left, :] = expanded_image[:, :, left:left+1, :].repeat(1, 1, left, 1)
-            # Right edge
-            if right > 0:
-                expanded_image[:, :, left+width:, :] = expanded_image[:, :, left+width-1:left+width, :].repeat(1, 1, right, 1)
-        
-        # Create expanded masks
-        expanded_masks = torch.zeros(batch_size, new_height, new_width, 
-                                   dtype=masks.dtype, device=masks.device)
-        expanded_masks[:, top:top+height, left:left+width] = masks
-        
-        canvas_info = {
-            'original_size': (height, width),
-            'expanded_size': (new_height, new_width),
-            'offset': (left, top),
-            'padding': (left, top, right, bottom)
-        }
-        
-        return expanded_image, expanded_masks, canvas_info
-    
-    def _create_stitcher_data(self, original_image, working_image, final_images, final_masks,
-                            crop_contexts, canvas_info, canvas_offset, resize_info,
-                            upscale_algorithm, downscale_algorithm, video_mode, force_max_window):
-        """Create comprehensive stitcher data for reconstruction"""
-        
-        stitcher = {
-            # Core reconstruction data
-            'original_image': original_image,
-            'working_image': working_image,
-            'crop_contexts': crop_contexts,
-            'canvas_info': canvas_info,
-            'canvas_offset': canvas_offset,
-            'resize_info': resize_info,
-            
-            # Processing parameters
-            'upscale_algorithm': upscale_algorithm,
+        # If there is only one image for many masks, replicate it for all masks
+        if mask.shape[0] > 1 and image.shape[0] == 1:
+            assert image.dim() == 4, f"Expected 4D BHWC image tensor, got {image.shape}"
+            image = image.expand(mask.shape[0], -1, -1, -1).clone()
+
+        # If there is only one mask for many images, replicate it for all images
+        if image.shape[0] > 1 and mask.shape[0] == 1:
+            assert mask.dim() == 3, f"Expected 3D BHW mask tensor, got {mask.shape}"
+            mask = mask.expand(image.shape[0], -1, -1).clone()
+
+        # If no optional_context_mask is provided, create one with the shape of the image
+        if optional_context_mask is None:
+            optional_context_mask = torch.zeros_like(image[:, :, :, 0])
+
+        # If there is only one optional_context_mask for many images, replicate it for all images
+        if image.shape[0] > 1 and optional_context_mask.shape[0] == 1:
+            assert optional_context_mask.dim() == 3, f"Expected 3D BHW optional_context_mask tensor, got {optional_context_mask.shape}"
+            optional_context_mask = optional_context_mask.expand(image.shape[0], -1, -1).clone()
+
+        if self.DEBUG_MODE:
+            print('Inpaint Crop Batch ready')
+            print(image.shape, type(image), image.dtype)
+            print(mask.shape, type(mask), mask.dtype)
+            print(optional_context_mask.shape, type(optional_context_mask), optional_context_mask.dtype)
+
+         # Validate data
+        assert image.ndimension() == 4, f"Expected 4 dimensions for image, got {image.ndimension()}"
+        assert mask.ndimension() == 3, f"Expected 3 dimensions for mask, got {mask.ndimension()}"
+        assert optional_context_mask.ndimension() == 3, f"Expected 3 dimensions for optional_context_mask, got {optional_context_mask.ndimension()}"
+        assert mask.shape[1:] == image.shape[1:3], f"Mask dimensions do not match image dimensions. Expected {image.shape[1:3]}, got {mask.shape[1:]}"
+        assert optional_context_mask.shape[1:] == image.shape[1:3], f"optional_context_mask dimensions do not match image dimensions. Expected {image.shape[1:3]}, got {optional_context_mask.shape[1:]}"
+        assert mask.shape[0] == image.shape[0], f"Mask batch does not match image batch. Expected {image.shape[0]}, got {mask.shape[0]}"
+        assert optional_context_mask.shape[0] == image.shape[0], f"Optional context mask batch does not match image batch. Expected {image.shape[0]}, got {optional_context_mask.shape[0]}"
+
+        # Run for each image separately
+        result_stitcher = {
             'downscale_algorithm': downscale_algorithm,
-            'video_mode': video_mode,
-            'force_max_window': force_max_window,
-            
-            # Masks for blending
-            'cropped_masks_for_blend': final_masks,
-            
-            # Metadata
-            'batch_size': original_image.shape[0],
-            'original_shape': original_image.shape,
-            'final_shape': final_images.shape,
+            'upscale_algorithm': upscale_algorithm,
+            'blend_pixels': mask_blend_pixels,
+            'canvas_to_orig_x': [],
+            'canvas_to_orig_y': [],
+            'canvas_to_orig_w': [],
+            'canvas_to_orig_h': [],
+            'canvas_image': [],
+            'cropped_to_canvas_x': [],
+            'cropped_to_canvas_y': [],
+            'cropped_to_canvas_w': [],
+            'cropped_to_canvas_h': [],
+            'cropped_mask_for_blend': [],
         }
         
-        return stitcher
-    
-    def _generate_crop_info(self, original_shape, final_shape, crop_contexts, canvas_info, 
-                          resize_info, video_mode, force_max_window):
-        """Generate human-readable crop information"""
-        
-        info_lines = []
-        info_lines.append("=== TILEDWAN INPAINT CROP IMPROVED SUMMARY ===")
-        info_lines.append(f"Original shape: {original_shape}")
-        info_lines.append(f"Final shape: {final_shape}")
-        info_lines.append(f"Video mode: {video_mode}")
-        info_lines.append(f"Force max window: {force_max_window}")
-        
-        if canvas_info:
-            info_lines.append(f"\nCanvas expansion:")
-            info_lines.append(f"  Original: {canvas_info['original_size']}")
-            info_lines.append(f"  Expanded: {canvas_info['expanded_size']}")
-            info_lines.append(f"  Padding: {canvas_info['padding']}")
-        
-        info_lines.append(f"\nCrop contexts:")
-        if force_max_window and len(set(str(ctx) for ctx in crop_contexts)) == 1:
-            ctx = crop_contexts[0]
-            info_lines.append(f"  Uniform: x={ctx['x']}, y={ctx['y']}, w={ctx['w']}, h={ctx['h']}")
+        result_image = []
+        result_mask = []
+
+        debug_outputs = {name: [] for name in self.RETURN_NAMES if name.startswith("DEBUG_")}
+
+        batch_size = image.shape[0]
+        for b in range(batch_size):
+            one_image = image[b].unsqueeze(0)
+            one_mask = mask[b].unsqueeze(0)
+            one_optional_context_mask = optional_context_mask[b].unsqueeze(0)
+
+            outputs = self.inpaint_crop_single_image(
+                one_image, downscale_algorithm, upscale_algorithm, preresize, preresize_mode,
+                preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height,
+                extend_for_outpainting, extend_up_factor, extend_down_factor, extend_left_factor, extend_right_factor,
+                mask_hipass_filter, mask_fill_holes, mask_expand_pixels, mask_invert, mask_blend_pixels,
+                context_from_mask_extend_factor, output_resize_to_target_size, output_target_width, output_target_height,
+                output_padding, one_mask, one_optional_context_mask)
+
+            stitcher, cropped_image, cropped_mask = outputs[:3]
+            for key in ['canvas_to_orig_x', 'canvas_to_orig_y', 'canvas_to_orig_w', 'canvas_to_orig_h', 'canvas_image', 'cropped_to_canvas_x', 'cropped_to_canvas_y', 'cropped_to_canvas_w', 'cropped_to_canvas_h', 'cropped_mask_for_blend']:
+                result_stitcher[key].append(stitcher[key])
+
+            cropped_image = cropped_image.clone().squeeze(0)
+            result_image.append(cropped_image)
+            cropped_mask = cropped_mask.clone().squeeze(0)
+            result_mask.append(cropped_mask)
+
+            # Handle the DEBUG_ fields dynamically
+            for name, output in zip(self.RETURN_NAMES[3:], outputs[3:]):  # Start from index 3 since first 3 are fixed
+                if name.startswith("DEBUG_"):
+                    output_array = output.squeeze(0)  # Assuming output needs to be squeezed similar to image/mask
+                    debug_outputs[name].append(output_array)
+
+        result_image = torch.stack(result_image, dim=0)
+        result_mask = torch.stack(result_mask, dim=0)
+
+        if self.DEBUG_MODE:
+            print('Inpaint Crop Batch output')
+            print(result_image.shape, type(result_image), result_image.dtype)
+            print(result_mask.shape, type(result_mask), result_mask.dtype)
+
+        debug_outputs = {name: torch.stack(values, dim=0) for name, values in debug_outputs.items()}
+
+        return result_stitcher, result_image, result_mask, [debug_outputs[name] for name in self.RETURN_NAMES if name.startswith("DEBUG_")]
+
+
+    def inpaint_crop_single_image(self, image, downscale_algorithm, upscale_algorithm, preresize, preresize_mode, preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height, extend_for_outpainting, extend_up_factor, extend_down_factor, extend_left_factor, extend_right_factor, mask_hipass_filter, mask_fill_holes, mask_expand_pixels, mask_invert, mask_blend_pixels, context_from_mask_extend_factor, output_resize_to_target_size, output_target_width, output_target_height, output_padding, mask, optional_context_mask):
+        if preresize:
+            image, mask, optional_context_mask = preresize_imm(image, mask, optional_context_mask, downscale_algorithm, upscale_algorithm, preresize_mode, preresize_min_width, preresize_min_height, preresize_max_width, preresize_max_height)
+        if self.DEBUG_MODE:
+            DEBUG_preresize_image = image.clone()
+            DEBUG_preresize_mask = mask.clone()
+       
+        if mask_fill_holes:
+           mask = fillholes_iterative_hipass_fill_m(mask)
+        if self.DEBUG_MODE:
+            DEBUG_fillholes_mask = mask.clone()
+
+        if mask_expand_pixels > 0:
+            mask = expand_m(mask, mask_expand_pixels)
+        if self.DEBUG_MODE:
+            DEBUG_expand_mask = mask.clone()
+
+        if mask_invert:
+            mask = invert_m(mask)
+        if self.DEBUG_MODE:
+            DEBUG_invert_mask = mask.clone()
+
+        if mask_blend_pixels > 0:
+            mask = expand_m(mask, mask_blend_pixels)
+            mask = blur_m(mask, mask_blend_pixels*0.5)
+        if self.DEBUG_MODE:
+            DEBUG_blur_mask = mask.clone()
+
+        if mask_hipass_filter >= 0.01:
+            mask = hipassfilter_m(mask, mask_hipass_filter)
+            optional_context_mask = hipassfilter_m(optional_context_mask, mask_hipass_filter)
+        if self.DEBUG_MODE:
+            DEBUG_hipassfilter_mask = mask.clone()
+
+        if extend_for_outpainting:
+            image, mask, optional_context_mask = extend_imm(image, mask, optional_context_mask, extend_up_factor, extend_down_factor, extend_left_factor, extend_right_factor)
+        if self.DEBUG_MODE:
+            DEBUG_extend_image = image.clone()
+            DEBUG_extend_mask = mask.clone()
+
+        context, x, y, w, h = findcontextarea_m(mask)
+        # If no mask, mask everything for some inpainting.
+        if x == -1 or w == -1 or h == -1 or y == -1:
+            x, y, w, h = 0, 0, image.shape[2], image.shape[1]
+            context = mask[:, y:y+h, x:x+w]
+        if self.DEBUG_MODE:
+            DEBUG_context_from_mask = context.clone()
+            DEBUG_context_from_mask_location = debug_context_location_in_image(image, x, y, w, h)
+
+        if context_from_mask_extend_factor >= 1.01:
+            context, x, y, w, h = growcontextarea_m(context, mask, x, y, w, h, context_from_mask_extend_factor)
+        # If no mask, mask everything for some inpainting.
+        if x == -1 or w == -1 or h == -1 or y == -1:
+            x, y, w, h = 0, 0, image.shape[2], image.shape[1]
+            context = mask[:, y:y+h, x:x+w]
+        if self.DEBUG_MODE:
+            DEBUG_context_expand = context.clone()
+            DEBUG_context_expand_location = debug_context_location_in_image(image, x, y, w, h)
+
+        context, x, y, w, h = combinecontextmask_m(context, mask, x, y, w, h, optional_context_mask)
+        # If no mask, mask everything for some inpainting.
+        if x == -1 or w == -1 or h == -1 or y == -1:
+            x, y, w, h = 0, 0, image.shape[2], image.shape[1]
+            context = mask[:, y:y+h, x:x+w]
+        if self.DEBUG_MODE:
+            DEBUG_context_with_context_mask = context.clone()
+            DEBUG_context_with_context_mask_location = debug_context_location_in_image(image, x, y, w, h)
+
+        if not output_resize_to_target_size:
+            canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
+        else: # if output_resize_to_target_size:
+            canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, output_target_width, output_target_height, output_padding, downscale_algorithm, upscale_algorithm)
+        if self.DEBUG_MODE:
+            DEBUG_context_to_target = context.clone()
+            DEBUG_context_to_target_location = debug_context_location_in_image(image, x, y, w, h)
+            DEBUG_context_to_target_image = image.clone()
+            DEBUG_context_to_target_mask = mask.clone()
+            DEBUG_canvas_image = canvas_image.clone()
+            DEBUG_orig_in_canvas_location = debug_context_location_in_image(canvas_image, cto_x, cto_y, cto_w, cto_h)
+            DEBUG_cropped_in_canvas_location = debug_context_location_in_image(canvas_image, ctc_x, ctc_y, ctc_w, ctc_h)
+
+        # For blending, grow the mask even further and make it blurrier.
+        cropped_mask_blend = cropped_mask.clone()
+        if mask_blend_pixels > 0:
+           cropped_mask_blend = blur_m(cropped_mask_blend, mask_blend_pixels*0.5)
+        if self.DEBUG_MODE:
+            DEBUG_cropped_mask_blend = cropped_mask_blend.clone()
+
+        stitcher = {
+            'canvas_to_orig_x': cto_x,
+            'canvas_to_orig_y': cto_y,
+            'canvas_to_orig_w': cto_w,
+            'canvas_to_orig_h': cto_h,
+            'canvas_image': canvas_image,
+            'cropped_to_canvas_x': ctc_x,
+            'cropped_to_canvas_y': ctc_y,
+            'cropped_to_canvas_w': ctc_w,
+            'cropped_to_canvas_h': ctc_h,
+            'cropped_mask_for_blend': cropped_mask_blend,
+        }
+
+        if not self.DEBUG_MODE:
+            return stitcher, cropped_image, cropped_mask
         else:
-            for i, ctx in enumerate(crop_contexts):
-                info_lines.append(f"  Frame {i}: x={ctx['x']}, y={ctx['y']}, w={ctx['w']}, h={ctx['h']}")
-        
-        if resize_info:
-            info_lines.append(f"\nResize: {resize_info['from']} → {resize_info['to']}")
-        else:
-            info_lines.append(f"\nNo resize applied")
-        
-        info_lines.append("="*50)
-        
-        return "\n".join(info_lines)
+            return stitcher, cropped_image, cropped_mask, DEBUG_preresize_image, DEBUG_preresize_mask, DEBUG_fillholes_mask, DEBUG_expand_mask, DEBUG_invert_mask, DEBUG_blur_mask, DEBUG_hipassfilter_mask, DEBUG_extend_image, DEBUG_extend_mask, DEBUG_context_from_mask, DEBUG_context_from_mask_location, DEBUG_context_expand, DEBUG_context_expand_location, DEBUG_context_with_context_mask, DEBUG_context_with_context_mask_location, DEBUG_context_to_target, DEBUG_context_to_target_location, DEBUG_context_to_target_image, DEBUG_context_to_target_mask, DEBUG_canvas_image, DEBUG_orig_in_canvas_location, DEBUG_cropped_in_canvas_location, DEBUG_cropped_mask_blend
 
 
-class TiledWanInpaintStitch:
+
+
+class InpaintStitchImproved:
     """
-    Enhanced Inpaint Stitch node with advanced compositing options:
-    - Mask-only inpainting (original behavior)
-    - Full-frame inpainting (incrust entire cropped area)
-    - Blend mode options for different use cases
-    """
-    
-    def __init__(self):
-        pass
+    ComfyUI-InpaintCropAndStitch
+    https://github.com/lquesada/ComfyUI-InpaintCropAndStitch
 
+    This node stitches the inpainted image without altering unmasked areas.
+    Enhanced with option to stitch back the entire cropped picture.
+    """
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "stitcher": ("STITCHER",),
                 "inpainted_image": ("IMAGE",),
-                "stitch_mode": (["mask_only", "full_frame"], {"default": "mask_only"}),
-                "blend_mode": (["normal", "multiply", "screen", "overlay", "soft_light"], {"default": "normal"}),
-                "edge_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 100, "step": 1}),
-                "feather_mask": ("BOOLEAN", {"default": True}),
-                "preserve_original_outside_crop": ("BOOLEAN", {"default": True}),
-                
-                # Advanced blending options
-                "opacity": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "color_correction": ("BOOLEAN", {"default": False}),
-                "match_histogram": ("BOOLEAN", {"default": False}),
-            },
-            "optional": {
-                "custom_blend_mask": ("MASK",),
-            },
+                "stitch_mode": (["mask_only", "entire_crop", "blend_entire"], {"default": "mask_only"}),
+                "blend_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+            }
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("stitched_image", "stitch_info")
-    FUNCTION = "stitch_inpainted"
-    OUTPUT_NODE = True
-    CATEGORY = "TiledWan"
+    CATEGORY = "inpaint"
+    DESCRIPTION = "Stitches an image cropped with Inpaint Crop back into the original image with enhanced blending options"
 
-    def stitch_inpainted(self, stitcher, inpainted_image, stitch_mode, blend_mode, edge_blend_pixels,
-                        feather_mask, preserve_original_outside_crop, opacity, color_correction,
-                        match_histogram, custom_blend_mask=None):
-        """
-        Enhanced inpaint stitching with full-frame and mask-only options
-        """
-        
-        print("\n" + "="*80)
-        print("           TILEDWAN INPAINT STITCH IMPROVED (ENHANCED)")
-        print("="*80)
-        print("🧩 Starting enhanced inpaint stitching...")
-        
-        try:
-            # Validate stitcher data
-            if not isinstance(stitcher, dict) or 'original_image' not in stitcher:
-                raise ValueError("Invalid stitcher data - missing required fields")
-            
-            original_image = stitcher['original_image']
-            crop_contexts = stitcher['crop_contexts']
-            batch_size = stitcher['batch_size']
-            
-            print(f"📹 Original: {original_image.shape}")
-            print(f"🎨 Inpainted: {inpainted_image.shape}")
-            print(f"🎯 Stitch mode: {stitch_mode}")
-            print(f"🌈 Blend mode: {blend_mode}")
-            print(f"🔍 Edge blend: {edge_blend_pixels}px")
-            
-            # Step 1: Resize inpainted images if needed
-            print(f"\n🔄 Step 1: Resize inpainted images...")
-            
-            if stitcher.get('resize_info'):
-                resize_info = stitcher['resize_info']
-                target_size = resize_info['from']  # Resize back to crop size
-                
-                print(f"📐 Resizing from {inpainted_image.shape[1:3]} to {target_size}")
-                
-                # Choose algorithm based on direction
-                if target_size[0] * target_size[1] > inpainted_image.shape[1] * inpainted_image.shape[2]:
-                    # Upscaling
-                    mode = 'bicubic' if stitcher.get('upscale_algorithm') == 'bicubic' else 'bilinear'
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+
+    FUNCTION = "inpaint_stitch"
+
+    def inpaint_stitch(self, stitcher, inpainted_image, stitch_mode, blend_strength):
+        inpainted_image = inpainted_image.clone()
+        results = []
+
+        batch_size = inpainted_image.shape[0]
+        assert len(stitcher['cropped_to_canvas_x']) == batch_size or len(stitcher['cropped_to_canvas_x']) == 1, "Stitch batch size doesn't match image batch size"
+        override = False
+        if len(stitcher['cropped_to_canvas_x']) != batch_size and len(stitcher['cropped_to_canvas_x']) == 1:
+            override = True
+        for b in range(batch_size):
+            one_image = inpainted_image[b]
+            one_stitcher = {}
+            for key in ['downscale_algorithm', 'upscale_algorithm', 'blend_pixels']:
+                one_stitcher[key] = stitcher[key]
+            for key in ['canvas_to_orig_x', 'canvas_to_orig_y', 'canvas_to_orig_w', 'canvas_to_orig_h', 'canvas_image', 'cropped_to_canvas_x', 'cropped_to_canvas_y', 'cropped_to_canvas_w', 'cropped_to_canvas_h', 'cropped_mask_for_blend']:
+                if override: # One stitcher for many images, always read 0.
+                    one_stitcher[key] = stitcher[key][0]
                 else:
-                    # Downscaling
-                    mode = 'area' if stitcher.get('downscale_algorithm') == 'area' else 'bilinear'
-                
-                resized_inpainted = torch.nn.functional.interpolate(
-                    inpainted_image.permute(0, 3, 1, 2),
-                    size=target_size,
-                    mode=mode if mode != 'area' else 'bilinear'
-                ).permute(0, 2, 3, 1)
-                
-                print(f"✅ Resized to: {resized_inpainted.shape}")
-            else:
-                resized_inpainted = inpainted_image
-                print("✅ No resize needed")
-            
-            # Step 2: Determine working canvas
-            print(f"\n🖼️ Step 2: Preparing working canvas...")
-            
-            if stitcher.get('canvas_info'):
-                # Working with expanded canvas
-                working_image = stitcher['working_image'].clone()
-                canvas_offset = stitcher['canvas_offset']
-                print(f"🔧 Using expanded canvas: {working_image.shape}")
-            else:
-                # Working with original image
-                working_image = original_image.clone()
-                canvas_offset = (0, 0)
-                print(f"🔧 Using original canvas: {working_image.shape}")
-            
-            # Step 3: Create blend masks based on stitch mode
-            print(f"\n🎭 Step 3: Creating blend masks ({stitch_mode})...")
-            
-            blend_masks = []
-            
-            for frame_idx in range(batch_size):
-                context = crop_contexts[frame_idx]
-                crop_h, crop_w = resized_inpainted.shape[1:3]
-                
-                if stitch_mode == "mask_only":
-                    # Use original mask for blending
-                    if 'cropped_masks_for_blend' in stitcher:
-                        mask = stitcher['cropped_masks_for_blend'][frame_idx]
-                        
-                        # Resize mask if needed
-                        if mask.shape != (crop_h, crop_w):
-                            mask = torch.nn.functional.interpolate(
-                                mask.unsqueeze(0).unsqueeze(0),
-                                size=(crop_h, crop_w),
-                                mode='nearest'
-                            ).squeeze(0).squeeze(0)
-                    else:
-                        # Fallback: create mask from crop area
-                        mask = torch.ones(crop_h, crop_w, dtype=torch.float32, device=working_image.device)
-                
-                elif stitch_mode == "full_frame":
-                    # Use full crop area for blending
-                    mask = torch.ones(crop_h, crop_w, dtype=torch.float32, device=working_image.device)
-                
-                else:
-                    raise ValueError(f"Unknown stitch mode: {stitch_mode}")
-                
-                # Apply feathering if requested
-                if feather_mask and edge_blend_pixels > 0:
-                    mask = self._apply_mask_feathering(mask, edge_blend_pixels)
-                
-                # Apply custom blend mask if provided
-                if custom_blend_mask is not None:
-                    custom_mask = custom_blend_mask[frame_idx]
-                    if custom_mask.shape != mask.shape:
-                        custom_mask = torch.nn.functional.interpolate(
-                            custom_mask.unsqueeze(0).unsqueeze(0),
-                            size=mask.shape,
-                            mode='bilinear'
-                        ).squeeze(0).squeeze(0)
-                    mask = mask * custom_mask
-                
-                blend_masks.append(mask)
-            
-            print(f"✅ Created {len(blend_masks)} blend masks")
-            
-            # Step 4: Apply color corrections if requested
-            print(f"\n🎨 Step 4: Color processing...")
-            
-            processed_inpainted = resized_inpainted.clone()
-            
-            if color_correction or match_histogram:
-                for frame_idx in range(batch_size):
-                    context = crop_contexts[frame_idx]
-                    
-                    # Get corresponding region from original
-                    orig_region = working_image[frame_idx, 
-                                              context['y']:context['y']+context['h'],
-                                              context['x']:context['x']+context['w']]
-                    
-                    inpainted_frame = processed_inpainted[frame_idx]
-                    
-                    if match_histogram:
-                        # Match histogram of inpainted to original
-                        matched_frame = self._match_histogram(inpainted_frame, orig_region)
-                        processed_inpainted[frame_idx] = matched_frame
-                        print(f"📊 Frame {frame_idx}: Histogram matched")
-                    
-                    if color_correction:
-                        # Apply color correction
-                        corrected_frame = self._apply_color_correction(inpainted_frame, orig_region)
-                        processed_inpainted[frame_idx] = corrected_frame
-                        print(f"🎨 Frame {frame_idx}: Color corrected")
-            
-            # Step 5: Composite inpainted images back to working canvas
-            print(f"\n🧩 Step 5: Compositing images...")
-            
-            result_image = working_image.clone()
-            
-            for frame_idx in range(batch_size):
-                context = crop_contexts[frame_idx]
-                blend_mask = blend_masks[frame_idx]
-                inpainted_frame = processed_inpainted[frame_idx]
-                
-                # Get target region in working canvas
-                target_region = result_image[frame_idx, 
-                                           context['y']:context['y']+context['h'],
-                                           context['x']:context['x']+context['w']]
-                
-                # Apply blend mode
-                if blend_mode == "normal":
-                    blended_region = target_region * (1.0 - blend_mask.unsqueeze(-1)) + \
-                                   inpainted_frame * blend_mask.unsqueeze(-1)
-                else:
-                    blended_region = self._apply_blend_mode(
-                        target_region, inpainted_frame, blend_mask, blend_mode
-                    )
-                
-                # Apply opacity
-                if opacity < 1.0:
-                    blended_region = target_region * (1.0 - opacity) + blended_region * opacity
-                
-                # Place back in result
-                result_image[frame_idx, 
-                           context['y']:context['y']+context['h'],
-                           context['x']:context['x']+context['w']] = blended_region
-            
-            print(f"✅ Composited {batch_size} frames")
-            
-            # Step 6: Handle canvas reconstruction if needed
-            print(f"\n🏗️ Step 6: Canvas reconstruction...")
-            
-            if stitcher.get('canvas_info'):
-                canvas_info = stitcher['canvas_info']
-                original_h, original_w = canvas_info['original_size']
-                offset_x, offset_y = canvas_info['offset']
-                
-                # Crop back to original size
-                final_image = result_image[:, offset_y:offset_y+original_h, offset_x:offset_x+original_w, :]
-                print(f"✂️ Cropped back to original size: {final_image.shape}")
-            else:
-                final_image = result_image
-                print(f"✅ Using full canvas: {final_image.shape}")
-            
-            # Step 7: Final preservations
-            if preserve_original_outside_crop:
-                # Ensure areas outside all crop regions remain unchanged
-                print(f"🛡️ Preserving original content outside crop regions...")
-                
-                # Create a mask of all modified areas
-                modified_mask = torch.zeros_like(original_image[:, :, :, 0])
-                
-                for frame_idx in range(batch_size):
-                    context = crop_contexts[frame_idx]
-                    
-                    # Account for canvas offset
-                    actual_x = context['x'] - canvas_offset[0]
-                    actual_y = context['y'] - canvas_offset[1]
-                    
-                    # Only mark areas that are within original bounds
-                    if (actual_x >= 0 and actual_y >= 0 and 
-                        actual_x + context['w'] <= original_image.shape[2] and
-                        actual_y + context['h'] <= original_image.shape[1]):
-                        
-                        modified_mask[frame_idx, actual_y:actual_y+context['h'], 
-                                    actual_x:actual_x+context['w']] = 1.0
-                
-                # Blend with original where not modified
-                final_image = (original_image * (1.0 - modified_mask.unsqueeze(-1)) + 
-                             final_image * modified_mask.unsqueeze(-1))
-                
-                print(f"✅ Original content preserved")
-            
-            # Generate stitch info
-            stitch_info = self._generate_stitch_info(
-                original_image.shape, final_image.shape, stitch_mode, blend_mode,
-                batch_size, stitcher, edge_blend_pixels, opacity
-            )
-            
-            print(f"✅ Enhanced inpaint stitching completed!")
-            print(f"📤 Final shape: {final_image.shape}")
-            print(f"🎯 Mode: {stitch_mode}")
-            print(f"🌈 Blend: {blend_mode}")
-            print("="*80 + "\n")
-            
-            return (final_image, stitch_info)
-            
-        except Exception as e:
-            print(f"❌ Error in enhanced inpaint stitching: {str(e)}")
-            import traceback
-            print(f"📋 Traceback: {traceback.format_exc()}")
-            print("="*80 + "\n")
-            
-            # Return inpainted image as fallback
-            error_info = f"Error in stitch processing: {str(e)}"
-            return (inpainted_image, error_info)
-    
-    def _apply_mask_feathering(self, mask, edge_pixels):
-        """Apply edge feathering to mask"""
-        # Simple feathering using gaussian blur
-        if edge_pixels <= 0:
-            return mask
-        
-        # Create a feathered version
-        feathered = torch.nn.functional.conv2d(
-            mask.unsqueeze(0).unsqueeze(0),
-            self._get_gaussian_kernel(edge_pixels).to(mask.device),
-            padding=edge_pixels
-        ).squeeze(0).squeeze(0)
-        
-        return feathered
-    
-    def _get_gaussian_kernel(self, kernel_size):
-        """Create a Gaussian kernel for feathering"""
-        sigma = kernel_size / 3.0
-        kernel = torch.zeros(1, 1, kernel_size*2+1, kernel_size*2+1)
-        
-        for i in range(kernel_size*2+1):
-            for j in range(kernel_size*2+1):
-                x, y = i - kernel_size, j - kernel_size
-                kernel[0, 0, i, j] = torch.exp(-(x*x + y*y) / (2*sigma*sigma))
-        
-        return kernel / kernel.sum()
-    
-    def _match_histogram(self, source, target):
-        """Match histogram of source to target"""
-        # Simple histogram matching implementation
-        # In a full implementation, you'd use proper histogram matching algorithms
-        
-        # Get means and stds
-        target_mean = target.mean(dim=(0, 1), keepdim=True)
-        target_std = target.std(dim=(0, 1), keepdim=True)
-        source_mean = source.mean(dim=(0, 1), keepdim=True)
-        source_std = source.std(dim=(0, 1), keepdim=True)
-        
-        # Match statistics
-        matched = (source - source_mean) * (target_std / (source_std + 1e-8)) + target_mean
-        
-        return torch.clamp(matched, 0, 1)
-    
-    def _apply_color_correction(self, source, target):
-        """Apply basic color correction"""
-        # Simple color correction - match average colors
-        target_avg = target.mean(dim=(0, 1), keepdim=True)
-        source_avg = source.mean(dim=(0, 1), keepdim=True)
-        
-        correction = target_avg - source_avg
-        corrected = source + correction * 0.5  # Apply 50% of correction
-        
-        return torch.clamp(corrected, 0, 1)
-    
-    def _apply_blend_mode(self, base, overlay, mask, mode):
-        """Apply different blend modes"""
-        mask_expanded = mask.unsqueeze(-1)
-        
-        if mode == "multiply":
-            blended = base * overlay
-        elif mode == "screen":
-            blended = 1.0 - (1.0 - base) * (1.0 - overlay)
-        elif mode == "overlay":
-            blended = torch.where(base < 0.5, 
-                                2.0 * base * overlay,
-                                1.0 - 2.0 * (1.0 - base) * (1.0 - overlay))
-        elif mode == "soft_light":
-            blended = torch.where(overlay < 0.5,
-                                2.0 * base * overlay + base * base * (1.0 - 2.0 * overlay),
-                                2.0 * base * (1.0 - overlay) + torch.sqrt(base) * (2.0 * overlay - 1.0))
-        else:  # normal
-            blended = overlay
-        
-        # Apply mask
-        result = base * (1.0 - mask_expanded) + blended * mask_expanded
-        
-        return torch.clamp(result, 0, 1)
-    
-    def _generate_stitch_info(self, original_shape, final_shape, stitch_mode, blend_mode,
-                            batch_size, stitcher, edge_blend_pixels, opacity):
-        """Generate human-readable stitch information"""
-        
-        info_lines = []
-        info_lines.append("=== TILEDWAN INPAINT STITCH IMPROVED SUMMARY ===")
-        info_lines.append(f"Original shape: {original_shape}")
-        info_lines.append(f"Final shape: {final_shape}")
-        info_lines.append(f"Stitch mode: {stitch_mode}")
-        info_lines.append(f"Blend mode: {blend_mode}")
-        info_lines.append(f"Edge blend pixels: {edge_blend_pixels}")
-        info_lines.append(f"Opacity: {opacity}")
-        
+                    one_stitcher[key] = stitcher[key][b]
+            one_image = one_image.unsqueeze(0)
+            one_image, = self.inpaint_stitch_single_image(one_stitcher, one_image, stitch_mode, blend_strength)
+            one_image = one_image.squeeze(0)
+            one_image = one_image.clone()
+            results.append(one_image)
+
+        result_batch = torch.stack(results, dim=0)
+
+        return (result_batch,)
+
+    def inpaint_stitch_single_image(self, stitcher, inpainted_image, stitch_mode, blend_strength):
+        downscale_algorithm = stitcher['downscale_algorithm']
+        upscale_algorithm = stitcher['upscale_algorithm']
+        canvas_image = stitcher['canvas_image']
+
+        ctc_x = stitcher['cropped_to_canvas_x']
+        ctc_y = stitcher['cropped_to_canvas_y']
+        ctc_w = stitcher['cropped_to_canvas_w']
+        ctc_h = stitcher['cropped_to_canvas_h']
+
+        cto_x = stitcher['canvas_to_orig_x']
+        cto_y = stitcher['canvas_to_orig_y']
+        cto_w = stitcher['canvas_to_orig_w']
+        cto_h = stitcher['canvas_to_orig_h']
+
+        mask = stitcher['cropped_mask_for_blend']  # shape: [1, H, W]
+
         if stitch_mode == "mask_only":
-            info_lines.append("\nMask-only mode: Only masked regions are replaced")
-        else:
-            info_lines.append("\nFull-frame mode: Entire cropped area is inpainted")
+            # Original behavior - use mask for blending
+            output_image = stitch_magic_im(canvas_image, inpainted_image, mask, ctc_x, ctc_y, ctc_w, ctc_h, cto_x, cto_y, cto_w, cto_h, downscale_algorithm, upscale_algorithm)
         
-        if stitcher.get('canvas_info'):
-            info_lines.append(f"Canvas reconstruction: Applied")
-        else:
-            info_lines.append(f"Canvas reconstruction: Not needed")
+        elif stitch_mode == "entire_crop":
+            # Replace entire cropped region - create a full mask
+            full_mask = torch.ones_like(mask)
+            output_image = stitch_magic_im(canvas_image, inpainted_image, full_mask, ctc_x, ctc_y, ctc_w, ctc_h, cto_x, cto_y, cto_w, cto_h, downscale_algorithm, upscale_algorithm)
         
-        if stitcher.get('resize_info'):
-            resize_info = stitcher['resize_info']
-            info_lines.append(f"Resize applied: {resize_info['to']} → {resize_info['from']}")
-        
-        video_mode = stitcher.get('video_mode', False)
-        force_max_window = stitcher.get('force_max_window', False)
-        
-        if video_mode and force_max_window:
-            info_lines.append(f"Video processing: Maximum window across {batch_size} frames")
-        else:
-            info_lines.append(f"Processing: {batch_size} frame(s) independently")
-        
-        info_lines.append("="*50)
-        
-        return "\n".join(info_lines)
+        elif stitch_mode == "blend_entire":
+            # Blend entire cropped region with adjustable strength
+            full_mask = torch.ones_like(mask) * blend_strength
+            output_image = stitch_magic_im(canvas_image, inpainted_image, full_mask, ctc_x, ctc_y, ctc_w, ctc_h, cto_x, cto_y, cto_w, cto_h, downscale_algorithm, upscale_algorithm)
+
+        return (output_image,)
+
 
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
@@ -3978,8 +3898,8 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoVACEpipe": WanVideoVACEpipe,
     "TileAndStitchBack": TileAndStitchBack,
     "TiledWanVideoVACEpipe": TiledWanVideoVACEpipe,
-    "TiledWanInpaintCrop": TiledWanInpaintCrop,
-    "TiledWanInpaintStitch": TiledWanInpaintStitch
+    "TiledWanInpaintCropImproved": InpaintCropImproved,
+    "TiledWanInpaintStitchImproved": InpaintStitchImproved,
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -3992,6 +3912,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoVACEpipe": "WanVideo VACE Pipeline",
     "TileAndStitchBack": "Tile and Stitch Back",
     "TiledWanVideoVACEpipe": "Tiled WanVideo VACE Pipeline",
-    "TiledWanInpaintCrop": "TiledWan Inpaint Crop",
-    "TiledWanInpaintStitch": "TiledWan Inpaint Stitch"
+    "TiledWanInpaintCropImproved": "Tiled Wan Inpaint Crop Improved",
+    "TiledWanInpaintStitchImproved": "Tiled Wan Inpaint Stitch Improved"
 }
