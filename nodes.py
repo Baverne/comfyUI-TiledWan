@@ -3757,6 +3757,7 @@ class InpaintCropImproved:
             DEBUG_context_with_context_mask = context.clone()
             DEBUG_context_with_context_mask_location = debug_context_location_in_image(image, x, y, w, h)
 
+        print(f"Context area: x={x}, y={y}, w={w}, h={h}")
         if not output_resize_to_target_size:
             canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
         else: # if output_resize_to_target_size:
