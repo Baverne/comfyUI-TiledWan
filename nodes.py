@@ -3771,18 +3771,57 @@ class InpaintCropImproved:
             
   
             # Update all initial contexts to use consistent window size
+            # First, interpolate x and y coordinates for frames with invalid values (-1)
+            def interpolate_coordinates(coords):
+                """Interpolate missing coordinates (-1) using linear interpolation between valid values"""
+                coords = coords.copy()
+                n = len(coords)
+                
+                # Find all valid indices (where coord != -1)
+                valid_indices = [i for i, coord in enumerate(coords) if coord != -1]
+                
+                if not valid_indices:
+                    # No valid coordinates, fill with zeros
+                    return [0] * n
+                
+                # Handle leading -1s: use first valid value
+                first_valid_idx = valid_indices[0]
+                first_valid_value = coords[first_valid_idx]
+                for i in range(first_valid_idx):
+                    coords[i] = first_valid_value
+                
+                # Handle trailing -1s: use last valid value
+                last_valid_idx = valid_indices[-1]
+                last_valid_value = coords[last_valid_idx]
+                for i in range(last_valid_idx + 1, n):
+                    coords[i] = last_valid_value
+                
+                # Interpolate between valid values
+                for i in range(len(valid_indices) - 1):
+                    start_idx = valid_indices[i]
+                    end_idx = valid_indices[i + 1]
+                    start_val = coords[start_idx]
+                    end_val = coords[end_idx]
+                    
+                    # Linear interpolation for indices between start_idx and end_idx
+                    for j in range(start_idx + 1, end_idx):
+                        alpha = (j - start_idx) / (end_idx - start_idx)
+                        coords[j] = int(start_val + alpha * (end_val - start_val))
+                
+                return coords
+            
+            # Extract x and y coordinates
+            x_coords = [ctx['x'] for ctx in initial_contexts]
+            y_coords = [ctx['y'] for ctx in initial_contexts]
+            
+            # Interpolate invalid coordinates
+            x_coords = interpolate_coordinates(x_coords)
+            y_coords = interpolate_coordinates(y_coords)
+            
+            # Update contexts with interpolated coordinates
             for i, ctx in enumerate(initial_contexts):
-                # Adjust x and y if they would be negative
-                if ctx['x'] < 0:
-                    if i==0:
-                        ctx['x'] = 0
-                    else:
-                        ctx['x'] = initial_contexts[i-1]['x']
-                if ctx['y'] < 0:
-                    if i==0:
-                        ctx['y'] = 0
-                    else:
-                        ctx['y'] = initial_contexts[i-1]['y']
+                ctx['x'] = x_coords[i]
+                ctx['y'] = y_coords[i]
                 
                 # Update dimensions to maximum
                 ctx['w'] = max_w
