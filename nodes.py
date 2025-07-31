@@ -3758,7 +3758,6 @@ class InpaintCropImproved:
         initial_contexts = []
         for ctx in batch_contexts:
             context, x, y, w, h = findcontextarea_m(ctx['processed_mask'])
-            print('Initial context found: x', x, 'y', y, 'w', w, 'h', h)
             initial_contexts.append({'x': x, 'y': y, 'w': w, 'h': h})
         
         # Step 3: Apply keep_window_size logic if enabled
@@ -3896,7 +3895,6 @@ class InpaintCropImproved:
             DEBUG_context_with_context_mask = context.clone()
             DEBUG_context_with_context_mask_location = debug_context_location_in_image(image, x, y, w, h)
 
-        print(f"Context area: x={x}, y={y}, w={w}, h={h}")
         if not output_resize_to_target_size:
             # If keep_window_size is enabled and we have max dimensions, use them instead of w,h
             if keep_window_size and max_w is not None and max_h is not None:
@@ -4009,7 +4007,6 @@ class InpaintCropImproved:
             DEBUG_context_with_context_mask = context.clone()
             DEBUG_context_with_context_mask_location = debug_context_location_in_image(image, x, y, w, h)
 
-        print(f"Context area: x={x}, y={y}, w={w}, h={h}")
         if not output_resize_to_target_size:
             canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
         else: # if output_resize_to_target_size:
