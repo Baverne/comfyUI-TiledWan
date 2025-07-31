@@ -3671,7 +3671,7 @@ class InpaintCropImproved:
                 ctx['x'], ctx['y'], ctx['w'], ctx['h'], ctx['context'],
                 downscale_algorithm, upscale_algorithm, mask_blend_pixels,
                 output_resize_to_target_size, output_target_width, output_target_height, output_padding,
-                keep_window_size, max_w, max_h)
+                keep_window_size, max_w, max_h, context_from_mask_extend_factor)
 
             stitcher, cropped_image, cropped_mask = outputs[:3]
             for key in ['canvas_to_orig_x', 'canvas_to_orig_y', 'canvas_to_orig_w', 'canvas_to_orig_h', 'canvas_image', 'cropped_to_canvas_x', 'cropped_to_canvas_y', 'cropped_to_canvas_w', 'cropped_to_canvas_h', 'cropped_mask_for_blend']:
@@ -3873,7 +3873,7 @@ class InpaintCropImproved:
     def inpaint_crop_single_image_with_context(self, image, mask, optional_context_mask, x, y, w, h, context,
                                              downscale_algorithm, upscale_algorithm, mask_blend_pixels,
                                              output_resize_to_target_size, output_target_width, output_target_height, output_padding, 
-                                             keep_window_size=False, max_w=None, max_h=None):
+                                             keep_window_size=False, max_w=None, max_h=None, context_from_mask_extend_factor=1.0):
         """
         Process a single image with pre-computed context coordinates.
         This is the simplified version that skips all the mask preprocessing since it's already done.
@@ -3900,6 +3900,7 @@ class InpaintCropImproved:
             if keep_window_size and max_w is not None and max_h is not None:
                 canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, max_w, max_h, output_padding, downscale_algorithm, upscale_algorithm)
             else:
+                # Use the actual context dimensions w,h which already include the extend factor
                 canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
         else: # if output_resize_to_target_size:
             canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, output_target_width, output_target_height, output_padding, downscale_algorithm, upscale_algorithm)
