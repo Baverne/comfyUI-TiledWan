@@ -4162,7 +4162,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple",
     "WanVideoVACEpipe": "WanVideo VACE Pipeline",
     "TileAndStitchBack": "Tile and Stitch Back",
-    "TiledWanVideoVACEpipe": "Tiled WanVideo VACE Pipeline",
-    "TiledWanInpaintCropImproved": "Tiled Wan Inpaint Crop Improved",
-    "TiledWanInpaintStitchImproved": "Tiled Wan Inpaint Stitch Improved"
+    "TiledWanVideoVACEpipe": "TiledWan Video VACE Pipeline",
+    "TiledWanInpaintCropImproved": "TiledWan Inpaint Crop Improved",
+    "TiledWanInpaintStitchImproved": "TiledWan Inpaint Stitch Improved"
 }
