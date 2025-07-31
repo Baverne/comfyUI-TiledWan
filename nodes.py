@@ -3898,7 +3898,10 @@ class InpaintCropImproved:
         if not output_resize_to_target_size:
             # If keep_window_size is enabled and we have max dimensions, use them instead of w,h
             if keep_window_size and max_w is not None and max_h is not None:
-                canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, max_w, max_h, output_padding, downscale_algorithm, upscale_algorithm)
+                # Dont't forget to consider context_from_mask_extend_factor
+                extended_w = int(max_w * context_from_mask_extend_factor)
+                extended_h = int(max_h * context_from_mask_extend_factor)
+                canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, extended_w, extended_h, output_padding, downscale_algorithm, upscale_algorithm)
             else:
                 # Use the actual context dimensions w,h which already include the extend factor
                 canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
