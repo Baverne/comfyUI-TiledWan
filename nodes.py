@@ -3757,6 +3757,7 @@ class InpaintCropImproved:
         initial_contexts = []
         for ctx in batch_contexts:
             context, x, y, w, h = findcontextarea_m(ctx['processed_mask'])
+            print('Initial context found: x', x, 'y', y, 'w', w, 'h', h)
             if x == -1 or w == -1 or h == -1 or y == -1:
                 x, y, w, h = 0, 0, ctx['processed_image'].shape[2], ctx['processed_image'].shape[1]
             initial_contexts.append({'x': x, 'y': y, 'w': w, 'h': h})
