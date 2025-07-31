@@ -3758,8 +3758,6 @@ class InpaintCropImproved:
         for ctx in batch_contexts:
             context, x, y, w, h = findcontextarea_m(ctx['processed_mask'])
             print('Initial context found: x', x, 'y', y, 'w', w, 'h', h)
-            if x == -1 or w == -1 or h == -1 or y == -1:
-                x, y, w, h = 0, 0, ctx['processed_image'].shape[2], ctx['processed_image'].shape[1]
             initial_contexts.append({'x': x, 'y': y, 'w': w, 'h': h})
         
         # Step 3: Apply keep_window_size logic if enabled
@@ -3768,17 +3766,20 @@ class InpaintCropImproved:
             max_w = max(ctx['w'] for ctx in initial_contexts)
             max_h = max(ctx['h'] for ctx in initial_contexts)
             
-            # Find the minimum valid x and y to avoid negative coordinates
-            min_valid_x = min(ctx['x'] for ctx in initial_contexts if ctx['x'] >= 0)
-            min_valid_y = min(ctx['y'] for ctx in initial_contexts if ctx['y'] >= 0)
-            
+  
             # Update all initial contexts to use consistent window size
             for i, ctx in enumerate(initial_contexts):
                 # Adjust x and y if they would be negative
                 if ctx['x'] < 0:
-                    ctx['x'] = min_valid_x
+                    if i==0:
+                        ctx['x'] = 0
+                    else:
+                        ctx['x'] = initial_contexts[i-1]['x']
                 if ctx['y'] < 0:
-                    ctx['y'] = min_valid_y
+                    if i==0:
+                        ctx['y'] = 0
+                    else:
+                        ctx['y'] = initial_contexts[i-1]['y']
                 
                 # Update dimensions to maximum
                 ctx['w'] = max_w
