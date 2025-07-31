@@ -3653,7 +3653,7 @@ class InpaintCropImproved:
         batch_size = image.shape[0]
         
         # Compute all contexts first
-        batch_contexts = self.compute_batch_contexts(
+        batch_contexts, max_w, max_h = self.compute_batch_contexts(
             image, mask, optional_context_mask, downscale_algorithm, upscale_algorithm,
             preresize, preresize_mode, preresize_min_width, preresize_min_height, 
             preresize_max_width, preresize_max_height, extend_for_outpainting,
@@ -3670,7 +3670,8 @@ class InpaintCropImproved:
                 ctx['processed_image'], ctx['processed_mask'], ctx['processed_optional_context_mask'],
                 ctx['x'], ctx['y'], ctx['w'], ctx['h'], ctx['context'],
                 downscale_algorithm, upscale_algorithm, mask_blend_pixels,
-                output_resize_to_target_size, output_target_width, output_target_height, output_padding)
+                output_resize_to_target_size, output_target_width, output_target_height, output_padding,
+                keep_window_size, max_w, max_h)
 
             stitcher, cropped_image, cropped_mask = outputs[:3]
             for key in ['canvas_to_orig_x', 'canvas_to_orig_y', 'canvas_to_orig_w', 'canvas_to_orig_h', 'canvas_image', 'cropped_to_canvas_x', 'cropped_to_canvas_y', 'cropped_to_canvas_w', 'cropped_to_canvas_h', 'cropped_mask_for_blend']:
@@ -3761,6 +3762,8 @@ class InpaintCropImproved:
             initial_contexts.append({'x': x, 'y': y, 'w': w, 'h': h})
         
         # Step 3: Apply keep_window_size logic if enabled
+        max_w = None
+        max_h = None
         if keep_window_size and batch_size > 1:
             # Find maximum dimensions from initial contexts
             max_w = max(ctx['w'] for ctx in initial_contexts)
@@ -3827,11 +3830,12 @@ class InpaintCropImproved:
             ctx['w'] = w
             ctx['h'] = h
         
-        return batch_contexts
+        return batch_contexts, max_w, max_h
 
     def inpaint_crop_single_image_with_context(self, image, mask, optional_context_mask, x, y, w, h, context,
                                              downscale_algorithm, upscale_algorithm, mask_blend_pixels,
-                                             output_resize_to_target_size, output_target_width, output_target_height, output_padding):
+                                             output_resize_to_target_size, output_target_width, output_target_height, output_padding, 
+                                             keep_window_size=False, max_w=None, max_h=None):
         """
         Process a single image with pre-computed context coordinates.
         This is the simplified version that skips all the mask preprocessing since it's already done.
@@ -3855,7 +3859,11 @@ class InpaintCropImproved:
 
         print(f"Context area: x={x}, y={y}, w={w}, h={h}")
         if not output_resize_to_target_size:
-            canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
+            # If keep_window_size is enabled and we have max dimensions, use them instead of w,h
+            if keep_window_size and max_w is not None and max_h is not None:
+                canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, max_w, max_h, output_padding, downscale_algorithm, upscale_algorithm)
+            else:
+                canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, w, h, output_padding, downscale_algorithm, upscale_algorithm)
         else: # if output_resize_to_target_size:
             canvas_image, cto_x, cto_y, cto_w, cto_h, cropped_image, cropped_mask, ctc_x, ctc_y, ctc_w, ctc_h = crop_magic_im(image, mask, x, y, w, h, output_target_width, output_target_height, output_padding, downscale_algorithm, upscale_algorithm)
         
