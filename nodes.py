@@ -3575,8 +3575,8 @@ class InpaintCropImproved:
             if optional_context_mask is not None:
                 print(optional_context_mask.shape, type(optional_context_mask), optional_context_mask.dtype)
 
-        if image.shape[0] > 1:
-            assert output_resize_to_target_size, "output_resize_to_target_size must be enabled when input is a batch of images, given all images in the batch output have to be the same size"
+        if image.shape[0] > 1 and not keep_window_size:
+            assert output_resize_to_target_size, "output_resize_to_target_size must be enabled when input is a batch of images without keep_window_size enabled, given all images in the batch output have to be the same size (unless keep_window_size is enabled)"
 
         # When a LoadImage node passes a mask without user editing, it may be the wrong shape.
         # Detect and fix that to avoid shape mismatch errors.
