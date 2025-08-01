@@ -6,7 +6,6 @@ import random
 import os
 import sys
 import importlib
-import traceback
 import math
 import nodes
 import numpy as np
@@ -25,24 +24,35 @@ class ImageToMask:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
-                "channel": (["red", "green", "blue", "alpha"],),
+                "image": ("IMAGE", {"tooltip": "Input image to convert to mask. Can be any standard image format."}),
+                "channel": (["red", "green", "blue", "alpha"], {"tooltip": "Which color channel to extract as the mask. Alpha channel only available if image has transparency."}),
                 "clamp_output": ("BOOLEAN", {
                     "default": True,
                     "label_on": "enabled",
-                    "label_off": "disabled"
+                    "label_off": "disabled",
+                    "tooltip": "Clamp output values to 0-1 range. Recommended to keep enabled for proper mask values."
                 }),
                 "normalize_output": ("BOOLEAN", {
                     "default": True,
                     "label_on": "enabled", 
-                    "label_off": "disabled"
+                    "label_off": "disabled",
+                    "tooltip": "Normalize the output to use full 0-1 range."
                 }),
             },
         }
 
     CATEGORY = "TiledWan"
+    DESCRIPTION = """
+    Extracts a specific color channel from an image to create a mask.
+    
+    Useful for converting colored regions, alpha channels, or channel-specific data into masks
+    for use with inpainting, compositing, or other masking operations. The output mask values
+    represent the intensity of the selected channel, with proper normalization and clamping.
+    """
+    
     RETURN_TYPES = ("MASK",)
     RETURN_NAMES = ("mask",)
+    OUTPUT_TOOLTIPS = ("Grayscale mask derived from the selected image channel. White areas indicate high channel values, black areas indicate low values.",)
     FUNCTION = "image_to_mask"
 
     def image_to_mask(self, image, channel, clamp_output, normalize_output):
@@ -95,20 +105,35 @@ class ImageStatistics:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
+                "image": ("IMAGE", {"tooltip": "Input image to analyze. Statistics will be calculated across all pixels and channels."}),
                 "show_per_channel": ("BOOLEAN", {
                     "default": True,
                     "label_on": "enabled",
-                    "label_off": "disabled"
+                    "label_off": "disabled",
+                    "tooltip": "Display separate statistics for each color channel (R, G, B) in addition to overall statistics."
                 }),
             },
         }
 
     RETURN_TYPES = ("IMAGE", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT")
     RETURN_NAMES = ("image", "min_value", "max_value", "mean_value", "variance", "median_value")
+    OUTPUT_TOOLTIPS = ("Pass-through of the input image", 
+                      "Minimum pixel value found in the image", 
+                      "Maximum pixel value found in the image", 
+                      "Average pixel value across the entire image", 
+                      "Variance of pixel values (measure of spread/contrast)", 
+                      "Median pixel value (middle value when sorted)")
     FUNCTION = "calculate_statistics"
     OUTPUT_NODE = True  # This allows the node to display output in the console
     CATEGORY = "TiledWan"
+    DESCRIPTION = """
+    Analyzes image pixel values and provides comprehensive statistical information.
+    
+    Calculates key metrics including minimum, maximum, mean, variance, and median values.
+    Useful for understanding image characteristics, checking normalization, detecting
+    issues with image processing, and debugging workflows. Can show per-channel
+    statistics for color analysis.
+    """
 
     def calculate_statistics(self, image: torch.Tensor, show_per_channel: bool):
         """
@@ -242,20 +267,36 @@ class MaskStatistics:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "mask": ("MASK",),
+                "mask": ("MASK", {"tooltip": "Input mask to analyze. Should be a grayscale mask with values typically between 0-1."}),
                 "analyze_connected_components": ("BOOLEAN", {
                     "default": True,
                     "label_on": "enabled",
-                    "label_off": "disabled"
+                    "label_off": "disabled",
+                    "tooltip": "Analyze connected regions in the mask to count separate masked areas and find the largest connected component."
                 }),
             },
         }
 
     RETURN_TYPES = ("MASK", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "FLOAT", "INT")
     RETURN_NAMES = ("mask", "min_value", "max_value", "mean_value", "variance", "median_value", "white_pixel_count")
+    OUTPUT_TOOLTIPS = ("Pass-through of the input mask", 
+                      "Minimum mask value found", 
+                      "Maximum mask value found", 
+                      "Average mask value (coverage ratio)", 
+                      "Variance of mask values", 
+                      "Median mask value", 
+                      "Number of white/masked pixels (where value > 0.5)")
     FUNCTION = "calculate_mask_statistics"
     OUTPUT_NODE = True  # This allows the node to display output in the console
     CATEGORY = "TiledWan"
+    DESCRIPTION = """
+    Analyzes mask properties and provides detailed statistical information.
+    
+    Calculates standard statistics plus mask-specific metrics like coverage ratio,
+    connected component analysis, and white pixel count. Essential for understanding
+    mask quality, coverage area, and structure. Helps debug masking operations and
+    validate mask inputs for inpainting or compositing workflows.
+    """
 
     def calculate_mask_statistics(self, mask: torch.Tensor, analyze_connected_components: bool):
         """
@@ -444,524 +485,6 @@ class MaskStatistics:
         
         # Return the mask and key statistics
         return (mask, min_val, max_val, mean_val, variance_val, median_val, white_pixels)
-
-
-
-class TiledWanVideoSamplerSimple:
-    """
-    Complete wrapper for WanVideoSampler that exposes all possible input arguments.
-    This node provides maximum compatibility with the original WanVideoSampler by exposing
-    all parameters exactly as they should be, with proper defaults (rope_function="comfy").
-    TeaCache is controlled exclusively through cache_args input.
-    """
-    
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        """
-        Complete WanVideoSampler inputs with all possible arguments
-        """
-        return {
-            "required": {
-                # Core WanVideoSampler inputs
-                "model": ("WANVIDEOMODEL",),
-                "image_embeds": ("WANVIDIMAGE_EMBEDS",),
-                "steps": ("INT", {"default": 30, "min": 1}),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
-                    {"default": 'unipc'}),
-                "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
-                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "force_offload": ("BOOLEAN", {"default": True}),
-                "batched_cfg": ("BOOLEAN", {"default": False}),
-                "rope_function": (["default", "comfy"], {"default": "comfy"}),
-            },
-            "optional": {
-                # Optional core inputs
-                "text_embeds": ("WANVIDEOTEXTEMBEDS",),
-                "samples": ("LATENT",),
-                
-                # Advanced optional arguments
-                "feta_args": ("FETAARGS",),
-                "context_options": ("CONTEXTOPTIONS",),
-                "cache_args": ("CACHEARGS",),
-                "slg_args": ("SLGARGS",),
-                "loop_args": ("LOOPARGS",),
-                "experimental_args": ("EXPERIMENTALARGS",),
-                "sigmas": ("SIGMAS",),
-                "unianimate_poses": ("UNIANIMATE_POSES",),
-                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS",),
-                "uni3c_embeds": ("UNI3C_EMBEDS",),
-                "multitalk_embeds": ("MULTITALK_EMBEDS",),
-                "freeinit_args": ("FREEINIT_ARGS",),
-                "teacache_args": ("TEACACHE_ARGS",),
-            },
-        }
-
-    RETURN_TYPES = ("LATENT",)
-    RETURN_NAMES = ("latents",)
-    FUNCTION = "process_sampler"
-    OUTPUT_NODE = True
-    CATEGORY = "TiledWan"
-
-    def process_sampler(self, **kwargs):
-        """
-        Execute WanVideoSampler with all possible arguments
-        """
-        
-        print("\n" + "="*80)
-        print("                TILEDWAN WANVIDEO SAMPLER SIMPLE")
-        print("="*80)
-        print("🚀 Starting complete WanVideo sampler...")
-        
-        try:
-            # Import the WanVideoSampler
-            import sys
-            import os
-            import importlib
-            
-            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
-            if custom_nodes_path not in sys.path:
-                sys.path.append(custom_nodes_path)
-            
-            # Add parent directory to sys.path and import normally
-            parent_path = os.path.dirname(custom_nodes_path)
-            if parent_path not in sys.path:
-                sys.path.insert(0, parent_path)
-            
-            # Import the package normally to handle relative imports
-            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
-            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
-            
-            WanVideoSampler = wanvideo_package.WanVideoSampler
-            
-            print("🎯 Running WanVideoSampler with all parameters...")
-            print(f"📊 Parameters received: {list(kwargs.keys())}")
-            
-            # Run the sampler with all arguments
-            sampler_node = WanVideoSampler()
-            latent_samples = sampler_node.process(
-                model=kwargs["model"],
-                image_embeds=kwargs["image_embeds"],
-                steps=kwargs.get("steps", 30),
-                cfg=kwargs.get("cfg", 6.0),
-                shift=kwargs.get("shift", 5.0),
-                seed=kwargs.get("seed", 0),
-                scheduler=kwargs.get("scheduler", "unipc"),
-                riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-                text_embeds=kwargs.get("text_embeds"),
-                samples=kwargs.get("samples"),
-                denoise_strength=kwargs.get("denoise_strength", 1.0),
-                force_offload=kwargs.get("force_offload", True),
-                
-                # All the advanced arguments
-                cache_args=kwargs.get("cache_args"),
-                feta_args=kwargs.get("feta_args"),
-                context_options=kwargs.get("context_options"),
-                flowedit_args=None,  # Not in the list but exists in the original call
-                batched_cfg=kwargs.get("batched_cfg", False),
-                slg_args=kwargs.get("slg_args"),
-                rope_function=kwargs.get("rope_function", "comfy"),
-                loop_args=kwargs.get("loop_args"),
-                experimental_args=kwargs.get("experimental_args"),
-                sigmas=kwargs.get("sigmas"),
-                unianimate_poses=kwargs.get("unianimate_poses"),
-                fantasytalking_embeds=kwargs.get("fantasytalking_embeds"),
-                uni3c_embeds=kwargs.get("uni3c_embeds"),
-                multitalk_embeds=kwargs.get("multitalk_embeds"),
-                freeinit_args=kwargs.get("freeinit_args")
-            )[0]
-            
-            print("✅ Complete WanVideo sampler completed successfully!")
-            print(f"📤 Output shape: {latent_samples.get('samples', 'Unknown').shape if hasattr(latent_samples.get('samples', None), 'shape') else 'No shape info'}")
-            print(f"🔧 Cache used: {'Yes' if kwargs.get('cache_args') else 'No'}")
-            print(f"🔧 SLG used: {'Yes' if kwargs.get('slg_args') else 'No'}")
-            print(f"🔧 Experimental used: {'Yes' if kwargs.get('experimental_args') else 'No'}")
-            print(f"🔧 Rope function: {kwargs.get('rope_function', 'comfy')}")
-            print("="*80 + "\n")
-            
-            return (latent_samples,)
-            
-        except Exception as e:
-            import traceback
-            print(f"❌ Error in complete WanVideo sampler: {str(e)}")
-            print(f"📋 Traceback: {traceback.format_exc()}")
-            print("="*80 + "\n")
-            
-            # Return dummy output in case of error
-            dummy_latent = {"samples": torch.zeros((1, 16, 10, 8, 8))}  # Dummy latent
-            
-            return (dummy_latent,)
-
-
-class TiledWanVideoSLGSimple:
-    """
-    A very simple test node that only wraps WanVideoSLG for debugging.
-    This is the simplest possible wrapper to test import and basic functionality.
-    """
-    
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        """
-        Basic WanVideoSLG inputs only
-        """
-        return {
-            "required": {
-                "blocks": ("STRING", {"default": "10"}),
-                "start_percent": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-            },
-        }
-
-    RETURN_TYPES = ("SLGARGS",)
-    RETURN_NAMES = ("slg_args",)
-    FUNCTION = "process_slg"
-    OUTPUT_NODE = True
-    CATEGORY = "TiledWan"
-
-    def process_slg(self, **kwargs):
-        """
-        Execute only the WanVideoSLG
-        """
-        
-        print("\n" + "="*80)
-        print("                TILEDWAN WANVIDEO SLG SIMPLE")
-        print("="*80)
-        print("🚀 Starting simple WanVideoSLG test...")
-        
-        try:
-            # Import the WanVideoSLG
-            import sys
-            import os
-            import importlib
-            import traceback
-            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
-            print(f"🔍 Looking for WanVideo nodes in: {custom_nodes_path}")
-            
-            if custom_nodes_path not in sys.path:
-                sys.path.append(custom_nodes_path)
-                print(f"📁 Added to sys.path: {custom_nodes_path}")
-            
-            # Test if the path exists
-            if os.path.exists(custom_nodes_path):
-                print(f"✅ Path exists: {custom_nodes_path}")
-                nodes_file = os.path.join(custom_nodes_path, "nodes.py")
-                if os.path.exists(nodes_file):
-                    print(f"✅ nodes.py found: {nodes_file}")
-                else:
-                    print(f"❌ nodes.py NOT found: {nodes_file}")
-            else:
-                print(f"❌ Path does NOT exist: {custom_nodes_path}")
-            
-            print("🔄 Attempting import...")
-            
-            # Solution: Add parent directory to sys.path and import normally
-            parent_path = os.path.dirname(custom_nodes_path)
-            if parent_path not in sys.path:
-                sys.path.insert(0, parent_path)
-                print(f"📁 Added parent to sys.path: {parent_path}")
-            
-            # Import the package normally to handle relative imports
-            import importlib
-            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
-            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
-            
-            WanVideoSLG = wanvideo_package.WanVideoSLG
-            print("✅ Import successful!")
-            
-            print("🎯 Running WanVideoSLG with basic parameters...")
-            print(f"📊 Parameters received: {list(kwargs.keys())}")
-            
-            # Run the SLG node
-            slg_node = WanVideoSLG()
-            slg_args = slg_node.process(
-                blocks=kwargs.get("blocks", "10"),
-                start_percent=kwargs.get("start_percent", 0.1),
-                end_percent=kwargs.get("end_percent", 1.0)
-            )[0]
-            
-            print("✅ Simple WanVideoSLG completed successfully!")
-            print(f"📤 Output type: {type(slg_args)}")
-            print(f"📤 Output content: {slg_args}")
-            print("="*80 + "\n")
-            
-            return (slg_args,)
-            
-        except Exception as e:
-            import traceback
-            print(f"❌ Error in simple WanVideoSLG: {str(e)}")
-            print(f"📋 Full traceback:")
-            print(traceback.format_exc())
-            print("="*80 + "\n")
-            
-            # Return dummy output in case of error
-            dummy_slg = {"blocks": "10", "start_percent": 0.1, "end_percent": 1.0}
-            
-            return (dummy_slg,)
-
-
-class WanVideoVACEpipe:
-    """
-    Complete WanVideo pipeline that encapsulates WanVideo nodes:
-    - WanVideoVACEEncode -> image_embeds  
-    - WanVideoSampler (original, not TiledWan wrapper)
-    - WanVideoDecode -> final video output
-    
-    This node provides a complete video generation pipeline in a single node.
-    TeaCache, SLG, and Experimental arguments are provided externally for better modularity.
-    """
-    
-    def __init__(self):
-        pass
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        """
-        Streamlined pipeline inputs with external args for TeaCache, SLG, and Experimental features
-        """
-        return {
-            "required": {
-                # Core pipeline inputs
-                "model": ("WANVIDEOMODEL",),
-                "vae": ("WANVAE",),
-                
-                # WanVideoSampler core inputs
-                "steps": ("INT", {"default": 30, "min": 1}),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
-                    {"default": 'unipc'}),
-                
-                # WanVideoVACEEncode inputs
-                "vace_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8}),
-                "vace_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8}),
-                "vace_num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4}),
-                "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
-                "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                
-                # WanVideoDecode inputs
-                "decode_enable_vae_tiling": ("BOOLEAN", {"default": False}),
-                "decode_tile_x": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
-                "decode_tile_y": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8}),
-                "decode_tile_stride_x": ("INT", {"default": 144, "min": 32, "max": 2040, "step": 8}),
-                "decode_tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8}),
-            },
-            "optional": {
-                # WanVideoSampler optional inputs
-                "text_embeds": ("WANVIDEOTEXTEMBEDS",),
-                "samples": ("LATENT",),
-                "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
-                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "force_offload": ("BOOLEAN", {"default": True}),
-                "batched_cfg": ("BOOLEAN", {"default": False}),
-                "rope_function": (["default", "comfy"], {"default": "comfy"}),
-                
-                # WanVideoSampler advanced optional inputs
-                "feta_args": ("FETAARGS",),
-                "context_options": ("CONTEXTOPTIONS",),
-                "loop_args": ("LOOPARGS",),
-                "sigmas": ("SIGMAS",),
-                "unianimate_poses": ("UNIANIMATE_POSES",),
-                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS",),
-                "uni3c_embeds": ("UNI3C_EMBEDS",),
-                "multitalk_embeds": ("MULTITALK_EMBEDS",),
-                "freeinit_args": ("FREEINIT_ARGS",),
-                
-                # External pre-built arguments (for modularity)
-                "cache_args": ("CACHEARGS",),
-                "slg_args": ("SLGARGS",),
-                "experimental_args": ("EXPERIMENTALARGS",),
-                
-                # WanVideoVACEEncode optional inputs
-                "vace_input_frames": ("IMAGE",),
-                "vace_ref_images": ("IMAGE",),
-                "vace_input_masks": ("MASK",),
-                "vace_tiled_vae": ("BOOLEAN", {"default": False}),
-                
-                # WanVideoDecode optional inputs
-                "decode_normalization": (["default", "minmax"], {"default": "default"}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE", "LATENT")
-    RETURN_NAMES = ("video", "latents")
-    FUNCTION = "process_wanvideo_pipeline"
-    OUTPUT_NODE = True
-    CATEGORY = "TiledWan"
-
-    def process_wanvideo_pipeline(self, **kwargs):
-        """
-        Execute the streamlined WanVideo pipeline using external arguments
-        """
-        
-        print("\n" + "="*80)
-        print("                    WANVIDEO VACE PIPELINE")
-        print("="*80)
-        print("🚀 Starting streamlined WanVideo VACE pipeline...")
-        print(f"📊 Total parameters received: {len(kwargs)}")
-        
-        try:
-            # Import WanVideo nodes we need
-            import sys
-            import os
-            import importlib
-            import traceback
-            
-            custom_nodes_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "ComfyUI-WanVideoWrapper")
-            if custom_nodes_path not in sys.path:
-                sys.path.append(custom_nodes_path)
-                print(f"📁 Added to sys.path: {custom_nodes_path}")
-            
-            # Add parent directory to sys.path and import normally
-            parent_path = os.path.dirname(custom_nodes_path)
-            if parent_path not in sys.path:
-                sys.path.insert(0, parent_path)
-                print(f"📁 Added parent to sys.path: {parent_path}")
-            
-            # Import the package normally to handle relative imports
-            package_name = os.path.basename(custom_nodes_path)  # "ComfyUI-WanVideoWrapper"
-            print(f"🔄 Importing WanVideo package: {package_name}")
-            wanvideo_package = importlib.import_module(f"{package_name}.nodes")
-            
-            WanVideoSampler = wanvideo_package.WanVideoSampler
-            WanVideoVACEEncode = wanvideo_package.WanVideoVACEEncode
-            WanVideoDecode = wanvideo_package.WanVideoDecode
-            print("✅ Required WanVideo nodes imported successfully!")
-            
-            # Get external arguments directly from inputs
-            cache_args = kwargs.get("cache_args")
-            slg_args = kwargs.get("slg_args")
-            experimental_args = kwargs.get("experimental_args")
-            
-            print(f"📦 External arguments provided:")
-            print(f"   • TeaCache args: {'Yes' if cache_args else 'No'}")
-            print(f"   • SLG args: {'Yes' if slg_args else 'No'}")
-            print(f"   • Experimental args: {'Yes' if experimental_args else 'No'}")
-            
-            # Step 1: Create VACE embeds
-            print("📦 Step 1: Creating VACE embeds...")
-            vace_node = WanVideoVACEEncode()
-            vace_embeds = vace_node.process(
-                vae=kwargs["vae"],
-                width=kwargs.get("vace_width", 832),
-                height=kwargs.get("vace_height", 480),
-                num_frames=kwargs.get("vace_num_frames", 81),
-                strength=kwargs.get("vace_strength", 1.0),
-                vace_start_percent=kwargs.get("vace_start_percent", 0.0),
-                vace_end_percent=kwargs.get("vace_end_percent", 1.0),
-                input_frames=kwargs.get("vace_input_frames"),
-                ref_images=kwargs.get("vace_ref_images"),
-                input_masks=kwargs.get("vace_input_masks"),
-                tiled_vae=kwargs.get("vace_tiled_vae", False)
-            )[0]
-            print(f"✅ VACE embeds created: {type(vace_embeds)}")
-            
-            # Step 2: Run WanVideoSampler
-            print("🎯 Step 2: Running WanVideoSampler...")
-            print(f"   • Model: {type(kwargs['model'])}")
-            print(f"   • VACE embeds: {type(vace_embeds)}")
-            print(f"   • Steps: {kwargs.get('steps', 30)}")
-            print(f"   • CFG: {kwargs.get('cfg', 6.0)}")
-            print(f"   • Shift: {kwargs.get('shift', 5.0)}")
-            print(f"   • Seed: {kwargs.get('seed', 0)}")
-            print(f"   • Scheduler: {kwargs.get('scheduler', 'unipc')}")
-            print(f"   • Rope function: {kwargs.get('rope_function', 'comfy')}")
-            print(f"   • External TeaCache: {'Yes' if cache_args else 'No'}")
-            print(f"   • External SLG: {'Yes' if slg_args else 'No'}")
-            print(f"   • External Experimental: {'Yes' if experimental_args else 'No'}")
-            
-            sampler_node = WanVideoSampler()
-            latent_samples = sampler_node.process(
-                model=kwargs["model"],
-                image_embeds=vace_embeds,  # VACE embeds -> image_embeds
-                steps=kwargs.get("steps", 30),
-                cfg=kwargs.get("cfg", 6.0),
-                shift=kwargs.get("shift", 5.0),
-                seed=kwargs.get("seed", 0),
-                scheduler=kwargs.get("scheduler", "unipc"),
-                riflex_freq_index=kwargs.get("riflex_freq_index", 0),
-                text_embeds=kwargs.get("text_embeds"),
-                samples=kwargs.get("samples"),
-                denoise_strength=kwargs.get("denoise_strength", 1.0),
-                force_offload=kwargs.get("force_offload", True),
-                
-                # External arguments (much cleaner!)
-                cache_args=cache_args,
-                slg_args=slg_args,
-                experimental_args=experimental_args,
-                
-                # Other WanVideoSampler arguments
-                feta_args=kwargs.get("feta_args"),
-                context_options=kwargs.get("context_options"),
-                flowedit_args=None,
-                batched_cfg=kwargs.get("batched_cfg", False),
-                rope_function=kwargs.get("rope_function", "comfy"),
-                loop_args=kwargs.get("loop_args"),
-                sigmas=kwargs.get("sigmas"),
-                unianimate_poses=kwargs.get("unianimate_poses"),
-                fantasytalking_embeds=kwargs.get("fantasytalking_embeds"),
-                uni3c_embeds=kwargs.get("uni3c_embeds"),
-                multitalk_embeds=kwargs.get("multitalk_embeds"),
-                freeinit_args=kwargs.get("freeinit_args")
-            )[0]
-            
-            print(f"✅ WanVideoSampler completed!")
-            print(f"   • Output type: {type(latent_samples)}")
-            if hasattr(latent_samples, 'get') and 'samples' in latent_samples:
-                print(f"   • Latent shape: {latent_samples['samples'].shape}")
-            
-            # Step 3: Decode latents to video
-            print("🎬 Step 3: Decoding latents to video...")
-            print(f"   • VAE: {type(kwargs['vae'])}")
-            print(f"   • Latents: {type(latent_samples)}")
-            print(f"   • Enable VAE tiling: {kwargs.get('decode_enable_vae_tiling', False)}")
-            print(f"   • Tile size: {kwargs.get('decode_tile_x', 272)}x{kwargs.get('decode_tile_y', 272)}")
-            print(f"   • Normalization: {kwargs.get('decode_normalization', 'default')}")
-            
-            decode_node = WanVideoDecode()
-            video_output = decode_node.decode(
-                vae=kwargs["vae"],
-                samples=latent_samples,  # Sampler samples -> decode samples
-                enable_vae_tiling=kwargs.get("decode_enable_vae_tiling", False),
-                tile_x=kwargs.get("decode_tile_x", 272),
-                tile_y=kwargs.get("decode_tile_y", 272),
-                tile_stride_x=kwargs.get("decode_tile_stride_x", 144),
-                tile_stride_y=kwargs.get("decode_tile_stride_y", 128),
-                normalization=kwargs.get("decode_normalization", "default")
-            )[0]
-            
-            print(f"✅ Video decoding completed!")
-            print(f"   • Video output type: {type(video_output)}")
-            if hasattr(video_output, 'shape'):
-                print(f"   • Video shape: {video_output.shape}")
-            
-            print("🎉 Streamlined WanVideo VACE pipeline finished successfully!")
-            print("   Pipeline used external TeaCache, SLG, and Experimental arguments for maximum modularity")
-            print("="*80 + "\n")
-            
-            return (video_output, latent_samples)
-            
-        except Exception as e:
-            import traceback
-            print(f"❌ Error in WanVideo VACE pipeline: {str(e)}")
-            print(f"📋 Full traceback:")
-            print(traceback.format_exc())
-            print("="*80 + "\n")
-            
-            # Return dummy outputs in case of error
-            dummy_video = torch.zeros((1, 64, 64, 3))  # Dummy video frame
-            dummy_latent = {"samples": torch.zeros((1, 16, 10, 8, 8))}  # Dummy latent
-            
-            return (dummy_video, dummy_latent)
 
 
 class Tile:
@@ -1852,30 +1375,30 @@ class TiledWanVideoVACEpipe:
         return {
             "required": {
                 # Input video and mask
-                "video": ("IMAGE",),
-                "mask": ("MASK",),
+                "video": ("IMAGE", {"tooltip": "Input video frames to process. Can be very large videos that will be automatically tiled for memory efficiency."}),
+                "mask": ("MASK", {"tooltip": "Mask defining areas to be processed. Should match the video dimensions and frame count."}),
                 
                 # Core WanVideo pipeline inputs
-                "model": ("WANVIDEOMODEL",),
-                "vae": ("WANVAE",),
+                "model": ("WANVIDEOMODEL", {"tooltip": "WanVideo model for video generation/processing."}),
+                "vae": ("WANVAE", {"tooltip": "Video VAE for encoding/decoding frames."}),
                 
                 # Tiling parameters
-                "target_frames": ("INT", {"default": 81, "min": 16, "max": 200, "step": 1}),
-                "target_width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8}),
-                "target_height": ("INT", {"default": 480, "min": 64, "max": 2048, "step": 8}),
-                "frame_overlap": ("INT", {"default": 10, "min": 0, "max": 40, "step": 1}),
-                "spatial_overlap": ("INT", {"default": 20, "min": 0, "max": 100, "step": 4}),
+                "target_frames": ("INT", {"default": 81, "min": 16, "max": 200, "step": 1, "tooltip": "Target number of frames per temporal chunk. The model works best with 81 frames. If different, might generate artefact or frame drops"}),
+                "target_width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Target width for spatial tiles. Works best around 832."}),
+                "target_height": ("INT", {"default": 480, "min": 64, "max": 2048, "step": 8, "tooltip": "Target height for spatial tiles. Works best around 480."}),
+                "frame_overlap": ("INT", {"default": 10, "min": 0, "max": 40, "step": 1, "tooltip": "Number of overlapping frames between temporal chunks."}),
+                "spatial_overlap": ("INT", {"default": 20, "min": 0, "max": 100, "step": 4, "tooltip": "Pixel overlap between spatial tiles."}),
                 
                 # WanVideoSampler core parameters
-                "steps": ("INT", {"default": 30, "min": 1}),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Number of diffusion sampling steps."}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01, "tooltip": "Classifier-free guidance strength. Higher values follow the conditioning more closely."}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Shift parameter for the sampling schedule."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Random seed for reproducible results. Use the same seed to get identical outputs."}),
                 "scheduler": (["unipc", "unipc/beta", "dpm++", "dpm++/beta","dpm++_sde", "dpm++_sde/beta", "euler", "euler/beta", "euler/accvideo", "deis", "lcm", "lcm/beta", "flowmatch_causvid", "flowmatch_distill", "multitalk"],
-                    {"default": 'unipc'}),
+                    {"default": 'unipc', "tooltip": "Sampling scheduler algorithm."}),
                 
                 # WanVideoVACEEncode parameters  
-                "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
+                "vace_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "VACE encoding strength. Controls how much the video is modified during processing. 1.0 mean total reconstruction, 0.0 means no change."}),
                 "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 
@@ -1928,9 +1451,28 @@ class TiledWanVideoVACEpipe:
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("processed_video", "processing_info")
+    OUTPUT_TOOLTIPS = ("Processed video with WanVideo VACE pipeline applied through tiled processing. Maintains original dimensions and quality.", 
+                      "Detailed information about the processing including tile counts, timing, and processing summary.")
     FUNCTION = "process_tiled_wanvideo"
     OUTPUT_NODE = True
     CATEGORY = "TiledWan"
+    DESCRIPTION = """
+    Video processing node that tiles WanVideo VACE pipeline.
+    
+    Enables processing of arbitrarily large videos that would otherwise exceed model limits.
+    Uses dimension-wise tiling with temporal and spatial overlap to maintain
+    quality and eliminate artifacts. The complete WanVideo VACE pipeline is applied to each
+    tile with proper stitching and blending for seamless results.
+    Give last chunk frame as reference for the upcoming generation in order to maintain consistency across temporal chunks
+
+    Key Features:
+    - Handles any video size through tiling
+    - Temporal consistency across chunks thanks to cross-chunk reference
+    - Spatial seamless stitching with fade blending
+    - Memory-efficient processing with model offloading
+    - Complete WanVideo VACE pipeline integration
+    - Debug modes for monitoring and troubleshooting
+    """
 
     def process_tiled_wanvideo(self, video, mask, model, vae, target_frames, target_width, target_height, 
                               frame_overlap, spatial_overlap, steps, cfg, shift, seed, scheduler,
@@ -3437,56 +2979,69 @@ class InpaintCropImproved:
         return {
             "required": {
                 # Required inputs
-                "image": ("IMAGE",),
+                "image": ("IMAGE", {"tooltip": "Input image(s) to be processed. Can be a single image or batch of images for video processing."}),
 
                 # Resize algorithms
-                "downscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bilinear"}),
-                "upscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bicubic"}),
+                "downscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bilinear", "tooltip": "Algorithm used when downscaling images. Bilinear provides good balance of quality and speed."}),
+                "upscale_algorithm": (["nearest", "bilinear", "bicubic", "lanczos", "box", "hamming"], {"default": "bicubic", "tooltip": "Algorithm used when upscaling images. Bicubic provides better quality for upscaling."}),
 
                 # Pre-resize input image
-                "preresize": ("BOOLEAN", {"default": False, "tooltip": "Resize the original image before processing."}),
-                "preresize_mode": (["ensure minimum resolution", "ensure maximum resolution", "ensure minimum and maximum resolution"], {"default": "ensure minimum resolution"}),
-                "preresize_min_width": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
-                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
-                "preresize_max_width": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
-                "preresize_max_height": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1}),
+                "preresize": ("BOOLEAN", {"default": False, "tooltip": "Enable to resize the original image before processing. Useful for normalizing input sizes."}),
+                "preresize_mode": (["ensure minimum resolution", "ensure maximum resolution", "ensure minimum and maximum resolution"], {"default": "ensure minimum resolution", "tooltip": "Mode for pre-resizing: minimum ensures image is at least the specified size, maximum caps the size, both enforces a range."}),
+                "preresize_min_width": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Minimum width for pre-resize operation. Image will be upscaled if smaller."}),
+                "preresize_min_height": ("INT", {"default": 1024, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Minimum height for pre-resize operation. Image will be upscaled if smaller."}),
+                "preresize_max_width": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Maximum width for pre-resize operation. Image will be downscaled if larger."}),
+                "preresize_max_height": ("INT", {"default": nodes.MAX_RESOLUTION, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Maximum height for pre-resize operation. Image will be downscaled if larger."}),
 
                 # Mask manipulation
-                "mask_fill_holes": ("BOOLEAN", {"default": True, "tooltip": "Mark as masked any areas fully enclosed by mask."}),
-                "mask_expand_pixels": ("INT", {"default": 0, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Expand the mask by a certain amount of pixels before processing."}),
-                "mask_invert": ("BOOLEAN", {"default": False,"tooltip": "Invert mask so that anything masked will be kept."}),
-                "mask_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 64, "step": 1, "tooltip": "How many pixels to blend into the original image."}),
-                "mask_hipass_filter": ("FLOAT", {"default": 0.1, "min": 0, "max": 1, "step": 0.01, "tooltip": "Ignore mask values lower than this value."}),
+                "mask_fill_holes": ("BOOLEAN", {"default": True, "tooltip": "Fill holes in the mask using iterative morphological operations. Helps create more complete masked regions."}),
+                "mask_expand_pixels": ("INT", {"default": 0, "min": 0, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Expand the mask by this many pixels before processing. Useful for including more context around masked areas."}),
+                "mask_invert": ("BOOLEAN", {"default": False, "tooltip": "Invert the mask so that masked areas become unmasked and vice versa."}),
+                "mask_blend_pixels": ("INT", {"default": 32, "min": 0, "max": 64, "step": 1, "tooltip": "Create a soft transition zone around mask edges. Higher values create smoother blending during stitching."}),
+                "mask_hipass_filter": ("FLOAT", {"default": 0.1, "min": 0, "max": 1, "step": 0.01, "tooltip": "Remove mask values below this threshold. Helps eliminate weak mask areas and noise."}),
 
                 # Extend image for outpainting
-                "extend_for_outpainting": ("BOOLEAN", {"default": False, "tooltip": "Extend the image for outpainting."}),
-                "extend_up_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_down_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_left_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
-                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01}),
+                "extend_for_outpainting": ("BOOLEAN", {"default": False, "tooltip": "Extend the image canvas for outpainting. Adds padding around the image for generating content beyond original boundaries."}),
+                "extend_up_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01, "tooltip": "Factor to extend image upward. 1.0 = no extension, 1.5 = 50% extension upward."}),
+                "extend_down_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01, "tooltip": "Factor to extend image downward. 1.0 = no extension, 1.5 = 50% extension downward."}),
+                "extend_left_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01, "tooltip": "Factor to extend image leftward. 1.0 = no extension, 1.5 = 50% extension leftward."}),
+                "extend_right_factor": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01, "tooltip": "Factor to extend image rightward. 1.0 = no extension, 1.5 = 50% extension rightward."}),
 
                 # Context
-                "context_from_mask_extend_factor": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 100.0, "step": 0.01, "tooltip": "Grow the context area from the mask by a certain factor in every direction. For example, 1.5 grabs extra 50% up, down, left, and right as context."}),
+                "context_from_mask_extend_factor": ("FLOAT", {"default": 1.2, "min": 1.0, "max": 100.0, "step": 0.01, "tooltip": "Expand the context area around the mask by this factor. 1.2 = 20% expansion in all directions. Larger values include more surrounding context for better inpainting."}),
 
                 # Output
-                "output_resize_to_target_size": ("BOOLEAN", {"default": True, "tooltip": "Force a specific resolution for sampling."}),
-                "output_target_width": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1}),
-                "output_target_height": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1}),
-                "output_padding": (["0", "8", "16", "32", "64", "128", "256", "512"], {"default": "32"}),
+                "output_resize_to_target_size": ("BOOLEAN", {"default": True, "tooltip": "Resize the output to specific dimensions. When disabled, output size depends on mask area and extend factor."}),
+                "output_target_width": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Target width for output image when resize to target size is enabled. Should match your inpainting model's preferred resolution."}),
+                "output_target_height": ("INT", {"default": 512, "min": 64, "max": nodes.MAX_RESOLUTION, "step": 1, "tooltip": "Target height for output image when resize to target size is enabled. Should match your inpainting model's preferred resolution."}),
+                "output_padding": (["0", "8", "16", "32", "64", "128", "256", "512"], {"default": "32", "tooltip": "Padding to ensure output dimensions are multiples of this value. Important for models that require specific dimension alignment (e.g., 8 for VAE, 32 for some diffusion models)."}),
                 
                 # Batch consistency
-                "keep_window_size": ("BOOLEAN", {"default": False, "tooltip": "Keep consistent window size across all images in the batch by using the maximum dimensions found."}),
+                "keep_window_size": ("BOOLEAN", {"default": False, "tooltip": "Maintain consistent crop window size across all images in batch. Essential for video processing to avoid flickering. Uses maximum dimensions found and interpolates missing coordinates."}),
            },
            "optional": {
                 # Optional inputs
-                "mask": ("MASK",),
-                "optional_context_mask": ("MASK",),
+                "mask": ("MASK", {"tooltip": "Mask defining areas to be inpainted. White areas will be inpainted, black areas will be preserved. If not provided, the entire image will be processed."}),
+                "optional_context_mask": ("MASK", {"tooltip": "Additional mask defining extra context areas to include in the crop. Useful for ensuring important surrounding details are preserved during inpainting."}),
            }
         }
 
     FUNCTION = "inpaint_crop"
     CATEGORY = "inpaint"
-    DESCRIPTION = "Crops an image around a mask for inpainting, the optional context mask defines an extra area to keep for the context."
+    DESCRIPTION = """
+    Advanced inpainting crop node that intelligently crops images around masked areas for optimal inpainting results.
+    
+    Features:
+    - Batch processing with temporal consistency for video sequences
+    - Automatic context area detection and expansion
+    - Smart resizing with aspect ratio preservation
+    - Optional pre-processing (resize, mask manipulation, outpainting extension)
+    - Window size consistency across batches for video processing
+    - Linear interpolation for smooth mask transitions in video sequences
+    
+    The node processes masks to find the optimal crop area, applies various preprocessing steps, 
+    and outputs cropped images ready for inpainting along with stitcher data for reconstruction.
+    """
 
 
     # Remove the following # to turn on debug mode (extra outputs, print statements)
@@ -3494,6 +3049,9 @@ class InpaintCropImproved:
     DEBUG_MODE = False
     RETURN_TYPES = ("STITCHER", "IMAGE", "MASK")
     RETURN_NAMES = ("stitcher", "cropped_image", "cropped_mask")
+    OUTPUT_TOOLTIPS = ("Stitcher data containing all information needed to reconstruct the original image after inpainting. Pass this to InpaintStitchImproved.", 
+                      "Cropped and processed image ready for inpainting. Contains the masked area plus surrounding context.", 
+                      "Processed mask corresponding to the cropped image. Shows which areas need to be inpainted.")
 
     '''
     
@@ -4050,32 +3608,43 @@ class InpaintCropImproved:
             return stitcher, cropped_image, cropped_mask, DEBUG_preresize_image, DEBUG_preresize_mask, DEBUG_fillholes_mask, DEBUG_expand_mask, DEBUG_invert_mask, DEBUG_blur_mask, DEBUG_hipassfilter_mask, DEBUG_extend_image, DEBUG_extend_mask, DEBUG_context_from_mask, DEBUG_context_from_mask_location, DEBUG_context_expand, DEBUG_context_expand_location, DEBUG_context_with_context_mask, DEBUG_context_with_context_mask_location, DEBUG_context_to_target, DEBUG_context_to_target_location, DEBUG_context_to_target_image, DEBUG_context_to_target_mask, DEBUG_canvas_image, DEBUG_orig_in_canvas_location, DEBUG_cropped_in_canvas_location, DEBUG_cropped_mask_blend
 
 
-
-
 class InpaintStitchImproved:
     """
-    ComfyUI-InpaintCropAndStitch
-    https://github.com/lquesada/ComfyUI-InpaintCropAndStitch
-
-    This node stitches the inpainted image without altering unmasked areas.
-    Enhanced with option to stitch back the entire cropped picture.
+    Advanced inpainting stitch node that reconstructs full images from cropped inpainted regions.
+    
+    This node takes the output from InpaintCropImproved and stitches the inpainted results back 
+    into the original image context. It supports multiple blending modes and handles batch processing
+    for video sequences while maintaining temporal consistency.
     """
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "stitcher": ("STITCHER",),
-                "inpainted_image": ("IMAGE",),
-                "stitch_mode": (["mask_only", "entire_crop", "blend_entire"], {"default": "mask_only"}),
-                "blend_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "stitcher": ("STITCHER", {"tooltip": "Stitcher data from InpaintCropImproved containing reconstruction information including canvas coordinates, dimensions, and blending masks."}),
+                "inpainted_image": ("IMAGE", {"tooltip": "The inpainted image(s) to be stitched back. Should correspond to the cropped output from InpaintCropImproved after inpainting."}),
+                "stitch_mode": (["mask_only", "entire_crop", "blend_entire"], {"default": "mask_only", "tooltip": "Stitching method: 'mask_only' blends only masked areas, 'entire_crop' replaces the entire cropped region, 'blend_entire' smoothly blends the entire crop with surrounding areas."}),
+                "blend_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Strength of blending operation. 1.0 = full inpainted result, 0.0 = original image preserved. Only affects blend modes."}),
             }
         }
 
     CATEGORY = "inpaint"
-    DESCRIPTION = "Stitches an image cropped with Inpaint Crop back into the original image with enhanced blending options"
+    DESCRIPTION = """
+    Reconstructs full-resolution images by stitching inpainted crops back into their original context.
+    
+    Features:
+    - Multiple stitching modes for different use cases
+    - Batch processing support for video sequences  
+    - Smart blending to avoid seams and artifacts
+    - Automatic coordinate transformation and scaling
+    - Preserves original image quality in non-inpainted areas
+    
+    The node handles all the complex coordinate transformations, scaling, and blending
+    needed to seamlessly integrate inpainted content back into the source images.
+    """
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
+    OUTPUT_TOOLTIPS = ("Reconstructed full-resolution image(s) with inpainted content seamlessly integrated. Maintains original dimensions and quality.",)
 
     FUNCTION = "inpaint_stitch"
 
@@ -4148,9 +3717,6 @@ NODE_CLASS_MAPPINGS = {
     "TiledWanImageToMask": ImageToMask,
     "TiledWanImageStatistics": ImageStatistics,
     "TiledWanMaskStatistics": MaskStatistics,
-    "TiledWanVideoSamplerSimple": TiledWanVideoSamplerSimple,
-    "TiledWanVideoSLGSimple": TiledWanVideoSLGSimple,
-    "WanVideoVACEpipe": WanVideoVACEpipe,
     "TileAndStitchBack": TileAndStitchBack,
     "TiledWanVideoVACEpipe": TiledWanVideoVACEpipe,
     "TiledWanInpaintCropImproved": InpaintCropImproved,
@@ -4162,9 +3728,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TiledWanImageToMask": "TiledWan Image To Mask",
     "TiledWanImageStatistics": "TiledWan Image Statistics",
     "TiledWanMaskStatistics": "TiledWan Mask Statistics",
-    "TiledWanVideoSamplerSimple": "TiledWan Video Sampler Simple",
-    "TiledWanVideoSLGSimple": "TiledWan Video SLG Simple",
-    "WanVideoVACEpipe": "WanVideo VACE Pipeline",
     "TileAndStitchBack": "Tile and Stitch Back",
     "TiledWanVideoVACEpipe": "TiledWan Video VACE Pipeline",
     "TiledWanInpaintCropImproved": "TiledWan Inpaint Crop Improved",
