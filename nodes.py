@@ -1657,8 +1657,8 @@ class TiledWanVideoVACEpipe:
                 print(f"   🎬 Processing temporal chunk {temporal_idx + 1}/{len(temporal_tiles)} (frames {t_start}-{t_end-1})")
             
             # Extract temporal chunk
-            video_chunk = video[t_start:t_end]
-            mask_chunk = mask[t_start:t_end]
+            video_chunk = video[t_start:t_end].clone()  # HARD COPY to avoid modifying original
+            mask_chunk = mask[t_start:t_end].clone()    # HARD COPY to avoid modifying original
             
             # Store current chunk tiles for stitching the reference frame
             current_chunk_tiles = []
@@ -1673,8 +1673,8 @@ class TiledWanVideoVACEpipe:
                             f"H[{h_start}:{h_end}] × W[{w_start}:{w_end}]")
                     
                     # Extract spatial tiles from temporal chunk
-                    video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
-                    mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
+                    video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :].clone()  # HARD COPY to avoid modifying chunk
+                    mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end].clone()        # HARD COPY to avoid modifying chunk
                     
                     # ========== TEMPORAL OVERWRITING FOR CONSISTENCY ==========
                     if temporal_idx > 0 and previous_chunk_stitched_frame is not None:
@@ -1688,7 +1688,7 @@ class TiledWanVideoVACEpipe:
                         # Extract corresponding frames from previous chunk's stitched result
                         prev_chunk_frames = previous_chunk_stitched_frame.shape[0]
                         source_start_idx = max(0, prev_chunk_frames - frames_to_overwrite)
-                        source_frames = previous_chunk_stitched_frame[source_start_idx:, h_start:h_end, w_start:w_end, :]
+                        source_frames = previous_chunk_stitched_frame[source_start_idx:, h_start:h_end, w_start:w_end, :].clone()  # HARD COPY
                         
                         # Overwrite first frames of current tile with last frames from previous chunk
                         actual_overwrite = min(frames_to_overwrite, source_frames.shape[0], video_tile.shape[0])
@@ -1811,7 +1811,7 @@ class TiledWanVideoVACEpipe:
                             ref_frame_idx = max(0, ref_frame_idx)  # Ensure non-negative
                             
                             # Extract single COMPLETE FRAME as reference image
-                            tile_ref_images = previous_chunk_stitched_frame[ref_frame_idx:ref_frame_idx+1]  # Shape: [1, H, W, C]
+                            tile_ref_images = previous_chunk_stitched_frame[ref_frame_idx:ref_frame_idx+1].clone()  # Shape: [1, H, W, C] - HARD COPY
                             
                             if debug_mode and h_idx == 0 and w_idx == 0:  # Only print once per chunk
                                 print(f"      🔗 Frame-wise temporal chain: Using complete stitched frame {ref_frame_idx} from previous chunk T{temporal_idx-1}")
@@ -1860,6 +1860,14 @@ class TiledWanVideoVACEpipe:
                         # Force memory cleanup between tiles if requested
                         if force_offload_between_tiles:
                             self._force_memory_cleanup(model, vae)
+                        
+                        # CLEANUP: Delete tile copies to free memory immediately
+                        try:
+                            del video_tile, mask_tile, processed_tile
+                            if 'tile_latents' in locals():
+                                del tile_latents
+                        except:
+                            pass
                             
                     except Exception as tile_error:
                         print(f"         ❌ Error processing tile {tile_idx + 1}: {str(tile_error)}")
@@ -1883,6 +1891,12 @@ class TiledWanVideoVACEpipe:
                         
                         all_tiles.append(tile)
                         current_chunk_tiles.append(tile)
+                        
+                        # CLEANUP: Delete tile copies to free memory immediately (error case)
+                        try:
+                            del video_tile, mask_tile
+                        except:
+                            pass
             
             # STITCH THE CURRENT CHUNK TO CREATE REFERENCE FOR NEXT CHUNK
             if debug_mode:
@@ -1919,6 +1933,19 @@ class TiledWanVideoVACEpipe:
             if debug_mode:
                 chain_status = "user_ref" if temporal_idx == 0 else f"complete_frame_from_T{temporal_idx-1}"
                 print(f"      ✅ Temporal chunk {temporal_idx} completed with {chain_status} references")
+            
+            # CLEANUP: Delete temporal chunk copies to free memory
+            try:
+                del video_chunk, mask_chunk
+                del current_chunk_tiles, current_chunk_tiles_for_stitching
+                if 'column_strips' in locals():
+                    del column_strips
+                if 'temporal_chunks' in locals():
+                    del temporal_chunks
+                if 'current_chunk_stitched' in locals():
+                    del current_chunk_stitched
+            except:
+                pass
         
         print(f"   ✅ Extracted and processed {len(all_tiles)} tiles through WanVideo VACE pipeline")
         successful_tiles = sum(1 for tile in all_tiles if tile.processing_status == 'success')
