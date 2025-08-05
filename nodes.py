@@ -1479,7 +1479,8 @@ class TiledWanVideoVACEpipe:
     
     Overlap Behavior:
     - Overlap blending is limited to frame_overlap and spatial_overlap parameters
-    - Extra pixels/frames are ignored (they help generation but don't affect output)
+    - When actual overlap exceeds specified limits, blending starts from the correct position
+    - Extra pixels/frames are skipped (they help generation but don't affect output)
     - This ensures consistent results regardless of tile positioning
     """
 
@@ -1969,7 +1970,8 @@ class TiledWanVideoVACEpipe:
     def _stitch_tiles_vertically(self, column_tiles, spatial_overlap):
         """
         Stitch tiles vertically (in height dimension) with proper fade blending.
-        Always respects spatial_overlap limit - extra pixels are ignored (used for generation only).
+        Always respects spatial_overlap limit - starts blending from the correct position
+        within the overlapping region when actual overlap exceeds spatial_overlap.
         """
         if len(column_tiles) == 1:
             return column_tiles[0].content
@@ -2012,9 +2014,12 @@ class TiledWanVideoVACEpipe:
                     print(f"🎯 Tile {i}: Large overlap {actual_overlap} detected, limiting to {spatial_overlap} (extra pixels ignored)")
                 
                 if overlap_h > 0:
+                    # Calculate where to start within the tile based on actual overlap
+                    tile_start_offset = actual_overlap - overlap_h  # Skip extra pixels at the beginning
+                    
                     # Get regions for blending (limited to spatial_overlap size)
                     result_overlap = result[:, current_h-overlap_h:current_h, :, :]
-                    tile_overlap = tile.content[:, :overlap_h, :, :]
+                    tile_overlap = tile.content[:, tile_start_offset:tile_start_offset+overlap_h, :, :]
                     
                     # Create vertical fade mask
                     fade_mask = self._create_vertical_fade_mask(overlap_h, result_overlap.dtype, result_overlap.device)
@@ -2023,10 +2028,11 @@ class TiledWanVideoVACEpipe:
                     blended_overlap = result_overlap * (1.0 - fade_mask) + tile_overlap * fade_mask
                     result[:, current_h-overlap_h:current_h, :, :] = blended_overlap
                     
-                    # Place the non-overlapping part (skip the overlap region)
-                    if tile_h > overlap_h:
-                        result[:, current_h:current_h+tile_h-overlap_h, :, :] = tile.content[:, overlap_h:, :, :]
-                    current_h += tile_h - overlap_h
+                    # Place the non-overlapping part (skip the overlap region + offset)
+                    remaining_start = tile_start_offset + overlap_h
+                    if tile_h > remaining_start:
+                        result[:, current_h:current_h+tile_h-remaining_start, :, :] = tile.content[:, remaining_start:, :, :]
+                    current_h += tile_h - remaining_start
                 else:
                     # No overlap - place directly
                     result[:, current_h:current_h+tile_h, :, :] = tile.content
@@ -2037,7 +2043,8 @@ class TiledWanVideoVACEpipe:
     def _stitch_strips_horizontally(self, strips, spatial_overlap):
         """
         Stitch column strips horizontally (in width dimension) with proper fade blending.
-        Always respects spatial_overlap limit - extra pixels are ignored (used for generation only).
+        Always respects spatial_overlap limit - starts blending from the correct position
+        within the overlapping region when actual overlap exceeds spatial_overlap.
         """
         if len(strips) == 1:
             return strips[0]['content']
@@ -2081,9 +2088,12 @@ class TiledWanVideoVACEpipe:
                     print(f"🎯 Strip {i}: Large overlap {actual_overlap} detected, limiting to {spatial_overlap} (extra pixels ignored)")
                 
                 if overlap_w > 0:
+                    # Calculate where to start within the strip based on actual overlap
+                    strip_start_offset = actual_overlap - overlap_w  # Skip extra pixels at the beginning
+                    
                     # Get regions for blending (limited to spatial_overlap size)
                     result_overlap = result[:, :, current_w-overlap_w:current_w, :]
-                    strip_overlap = strip_content[:, :, :overlap_w, :]
+                    strip_overlap = strip_content[:, :, strip_start_offset:strip_start_offset+overlap_w, :]
                     
                     # Create horizontal fade mask
                     fade_mask = self._create_horizontal_fade_mask(overlap_w, result_overlap.dtype, result_overlap.device)
@@ -2092,10 +2102,11 @@ class TiledWanVideoVACEpipe:
                     blended_overlap = result_overlap * (1.0 - fade_mask) + strip_overlap * fade_mask
                     result[:, :, current_w-overlap_w:current_w, :] = blended_overlap
                     
-                    # Place the non-overlapping part (skip the overlap region)
-                    if strip_w > overlap_w:
-                        result[:, :, current_w:current_w+strip_w-overlap_w, :] = strip_content[:, :, overlap_w:, :]
-                    current_w += strip_w - overlap_w
+                    # Place the non-overlapping part (skip the overlap region + offset)
+                    remaining_start = strip_start_offset + overlap_w
+                    if strip_w > remaining_start:
+                        result[:, :, current_w:current_w+strip_w-remaining_start, :] = strip_content[:, :, remaining_start:, :]
+                    current_w += strip_w - remaining_start
                 else:
                     # No overlap - place directly
                     result[:, :, current_w:current_w+strip_w, :] = strip_content
@@ -2118,7 +2129,8 @@ class TiledWanVideoVACEpipe:
     def _stitch_temporal_chunks_new(self, temporal_chunks, temporal_tiles, frame_overlap):
         """
         Stitch temporal chunks to create the final output with temporal blending.
-        Always respects frame_overlap limit - extra frames are ignored (used for generation only).
+        Always respects frame_overlap limit - starts blending from the correct position
+        within the overlapping region when actual overlap exceeds frame_overlap.
         """
         if not temporal_chunks:
             return None
@@ -2178,9 +2190,12 @@ class TiledWanVideoVACEpipe:
                     print(f"🎯 Chunk {i}: Large overlap {actual_overlap} detected, limiting to {frame_overlap} (extra frames ignored)")
                 
                 if overlap_frames > 0:
+                    # Calculate where to start within the chunk based on actual overlap
+                    chunk_start_offset = actual_overlap - overlap_frames  # Skip extra frames at the beginning
+                    
                     # Get regions for blending (limited to frame_overlap size)
                     result_overlap = result[current_t-overlap_frames:current_t]
-                    chunk_overlap = chunk_content[:overlap_frames]
+                    chunk_overlap = chunk_content[chunk_start_offset:chunk_start_offset+overlap_frames]
                     
                     # Create temporal fade mask
                     fade_mask = self._create_temporal_fade_mask(overlap_frames, result_overlap.dtype, result_overlap.device)
@@ -2189,10 +2204,11 @@ class TiledWanVideoVACEpipe:
                     blended_overlap = result_overlap * (1.0 - fade_mask) + chunk_overlap * fade_mask
                     result[current_t-overlap_frames:current_t] = blended_overlap
                     
-                    # Place the non-overlapping part (skip the overlap region)
-                    if chunk_frames > overlap_frames:
-                        result[current_t:current_t+chunk_frames-overlap_frames] = chunk_content[overlap_frames:]
-                    current_t += chunk_frames - overlap_frames
+                    # Place the non-overlapping part (skip the overlap region + offset)
+                    remaining_start = chunk_start_offset + overlap_frames
+                    if chunk_frames > remaining_start:
+                        result[current_t:current_t+chunk_frames-remaining_start] = chunk_content[remaining_start:]
+                    current_t += chunk_frames - remaining_start
                 else:
                     # No overlap - place directly
                     result[current_t:current_t+chunk_frames] = chunk_content
