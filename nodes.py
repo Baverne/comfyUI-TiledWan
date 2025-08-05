@@ -1593,6 +1593,16 @@ class TiledWanVideoVACEpipe:
             print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
             print("="*80 + "\n")
             
+            # CLEANUP: Clear variables to prevent interference with subsequent runs
+            try:
+                del all_tiles, column_strips, temporal_chunks, stitched_video
+                del temporal_tiles, spatial_tiles_h, spatial_tiles_w
+                if 'previous_chunk_stitched_frame' in locals():
+                    del previous_chunk_stitched_frame
+                print("🧹 Variables cleaned up for next run")
+            except:
+                pass
+            
             return (final_video, processing_summary, first_chunk, second_chunk)
             
         except Exception as e:
@@ -1604,6 +1614,27 @@ class TiledWanVideoVACEpipe:
             
             # Return original video in case of error
             error_info = f"Error during tiled WanVideo processing: {str(e)}"
+            
+            # CLEANUP: Clear variables even on error to prevent interference with subsequent runs
+            try:
+                if 'all_tiles' in locals():
+                    del all_tiles
+                if 'column_strips' in locals():
+                    del column_strips
+                if 'temporal_chunks' in locals():
+                    del temporal_chunks
+                if 'temporal_tiles' in locals():
+                    del temporal_tiles
+                if 'spatial_tiles_h' in locals():
+                    del spatial_tiles_h
+                if 'spatial_tiles_w' in locals():
+                    del spatial_tiles_w
+                if 'previous_chunk_stitched_frame' in locals():
+                    del previous_chunk_stitched_frame
+                print("🧹 Variables cleaned up after error")
+            except:
+                pass
+            
             return (video, error_info, video, video)
     
     
@@ -1618,6 +1649,7 @@ class TiledWanVideoVACEpipe:
         all_tiles = []
         
         # Store previous temporal chunk's COMPLETE STITCHED FRAME for reference
+        # IMPORTANT: Always start fresh to avoid interference from previous runs
         previous_chunk_stitched_frame = None
         
         for temporal_idx, (t_start, t_end) in enumerate(temporal_tiles):
@@ -1919,6 +1951,12 @@ class TiledWanVideoVACEpipe:
             print(f"      • Chunk 0: Used user-provided reference images")
             for t_idx in range(1, len(temporal_tiles)):
                 print(f"      • Chunk {t_idx}: Used complete stitched frame from Chunk {t_idx-1}")
+        
+        # CLEANUP: Ensure previous_chunk_stitched_frame doesn't persist for next run
+        try:
+            del previous_chunk_stitched_frame
+        except:
+            pass
         
         return all_tiles
     
