@@ -1638,6 +1638,125 @@ class TiledWanVideoVACEpipe:
                     video_tile = video_chunk[:, h_start:h_end, w_start:w_end, :]
                     mask_tile = mask_chunk[:, h_start:h_end, w_start:w_end]
                     
+                    # ========== TEMPORAL OVERWRITING FOR CONSISTENCY ==========
+                    if temporal_idx > 0 and previous_chunk_stitched_frame is not None:
+                        # Determine how many frames to overwrite
+                        frames_to_overwrite = frame_overlap
+                        if temporal_idx == len(temporal_tiles) - 1:
+                            # Last chunk: use more frames if chunk is large enough
+                            available_frames = video_tile.shape[0]
+                            frames_to_overwrite = min(available_frames - 1, max(frame_overlap, available_frames // 3))
+                        
+                        # Extract corresponding frames from previous chunk's stitched result
+                        prev_chunk_frames = previous_chunk_stitched_frame.shape[0]
+                        source_start_idx = max(0, prev_chunk_frames - frames_to_overwrite)
+                        source_frames = previous_chunk_stitched_frame[source_start_idx:, h_start:h_end, w_start:w_end, :]
+                        
+                        # Overwrite first frames of current tile with last frames from previous chunk
+                        actual_overwrite = min(frames_to_overwrite, source_frames.shape[0], video_tile.shape[0])
+                        if actual_overwrite > 0:
+                            video_tile[:actual_overwrite] = source_frames[:actual_overwrite]
+                            # Zero out corresponding mask areas
+                            mask_tile[:actual_overwrite] = 0.0
+                            
+                            if debug_mode:
+                                print(f"         🔄 Temporal overwrite: {actual_overwrite} frames from prev chunk")
+                    
+                    # ========== SPATIAL OVERWRITING FOR CONSISTENCY ==========
+                    # Look for already processed tiles to overwrite overlapping regions
+                    
+                    # Check for LEFT neighbor (same temporal and line, previous column)
+                    if w_idx > 0:
+                        left_neighbor = None
+                        for tile in current_chunk_tiles:
+                            if (tile.temporal_index == temporal_idx and 
+                                tile.line_index == h_idx and 
+                                tile.column_index == w_idx - 1):
+                                left_neighbor = tile
+                                break
+                        
+                        if left_neighbor is not None and hasattr(left_neighbor, 'content'):
+                            # Calculate overlap region
+                            left_tile_end = left_neighbor.spatial_range_w[1]
+                            current_tile_start = w_start
+                            overlap_width = left_tile_end - current_tile_start
+                            
+                            if overlap_width > 0:
+                                # Extract overlap from left neighbor's right edge
+                                left_content = left_neighbor.content
+                                left_overlap = left_content[:, :, -overlap_width:, :]  # Last overlap_width columns
+                                
+                                # Overwrite left edge of current tile
+                                video_tile[:, :, :overlap_width, :] = left_overlap
+                                # Zero out corresponding mask areas
+                                mask_tile[:, :, :overlap_width] = 0.0
+                                
+                                if debug_mode:
+                                    print(f"         ↔️ Spatial overwrite LEFT: {overlap_width} pixels from neighbor")
+                    
+                    # Check for TOP neighbor (same temporal and column, previous line)
+                    if h_idx > 0:
+                        top_neighbor = None
+                        for tile in current_chunk_tiles:
+                            if (tile.temporal_index == temporal_idx and 
+                                tile.line_index == h_idx - 1 and 
+                                tile.column_index == w_idx):
+                                top_neighbor = tile
+                                break
+                        
+                        if top_neighbor is not None and hasattr(top_neighbor, 'content'):
+                            # Calculate overlap region
+                            top_tile_end = top_neighbor.spatial_range_h[1]
+                            current_tile_start = h_start
+                            overlap_height = top_tile_end - current_tile_start
+                            
+                            if overlap_height > 0:
+                                # Extract overlap from top neighbor's bottom edge
+                                top_content = top_neighbor.content
+                                top_overlap = top_content[:, -overlap_height:, :, :]  # Last overlap_height rows
+                                
+                                # Overwrite top edge of current tile
+                                video_tile[:, :overlap_height, :, :] = top_overlap
+                                # Zero out corresponding mask areas
+                                mask_tile[:, :overlap_height, :] = 0.0
+                                
+                                if debug_mode:
+                                    print(f"         ↕️ Spatial overwrite TOP: {overlap_height} pixels from neighbor")
+                    
+                    # Handle TOP-LEFT corner conflict (if both top and left neighbors exist)
+                    if h_idx > 0 and w_idx > 0:
+                        # Find top-left diagonal neighbor
+                        topleft_neighbor = None
+                        for tile in current_chunk_tiles:
+                            if (tile.temporal_index == temporal_idx and 
+                                tile.line_index == h_idx - 1 and 
+                                tile.column_index == w_idx - 1):
+                                topleft_neighbor = tile
+                                break
+                        
+                        if topleft_neighbor is not None and hasattr(topleft_neighbor, 'content'):
+                            # Calculate corner overlap
+                            top_tile_end_h = topleft_neighbor.spatial_range_h[1]
+                            left_tile_end_w = topleft_neighbor.spatial_range_w[1]
+                            current_start_h = h_start
+                            current_start_w = w_start
+                            
+                            overlap_h = top_tile_end_h - current_start_h
+                            overlap_w = left_tile_end_w - current_start_w
+                            
+                            if overlap_h > 0 and overlap_w > 0:
+                                # Extract corner from top-left neighbor
+                                topleft_content = topleft_neighbor.content
+                                corner_overlap = topleft_content[:, -overlap_h:, -overlap_w:, :]
+                                
+                                # Overwrite corner of current tile
+                                video_tile[:, :overlap_h, :overlap_w, :] = corner_overlap
+                                # Zero out corresponding mask areas
+                                mask_tile[:, :overlap_h, :overlap_w] = 0.0
+                                
+                                if debug_mode:
+                                    print(f"         ↖️ Spatial overwrite CORNER: {overlap_h}x{overlap_w} from diagonal neighbor")
+                    
                     # FRAME-WISE TEMPORAL CONSISTENCY: Determine reference image for this tile
                     tile_ref_images = None
                     
@@ -1766,6 +1885,27 @@ class TiledWanVideoVACEpipe:
         print(f"   ✅ Extracted and processed {len(all_tiles)} tiles through WanVideo VACE pipeline")
         successful_tiles = sum(1 for tile in all_tiles if tile.processing_status == 'success')
         print(f"   🎯 Success rate: {successful_tiles}/{len(all_tiles)} ({(successful_tiles/len(all_tiles))*100:.1f}%)")
+        
+        # Debug: Print overwriting statistics
+        if debug_mode:
+            temporal_overwrites = sum(1 for t_idx in range(1, len(temporal_tiles)))
+            spatial_overwrites = 0
+            corner_overwrites = 0
+            
+            for temporal_idx in range(len(temporal_tiles)):
+                for h_idx in range(len(spatial_tiles_h)):
+                    for w_idx in range(len(spatial_tiles_w)):
+                        if w_idx > 0:  # Has left neighbor
+                            spatial_overwrites += 1
+                        if h_idx > 0:  # Has top neighbor
+                            spatial_overwrites += 1
+                        if h_idx > 0 and w_idx > 0:  # Has corner conflict
+                            corner_overwrites += 1
+            
+            print(f"   🔄 Overwriting consistency enhancements:")
+            print(f"      • Temporal overwrites: {temporal_overwrites * len(spatial_tiles_h) * len(spatial_tiles_w)} tile operations")
+            print(f"      • Spatial overwrites: {spatial_overwrites} edge operations") 
+            print(f"      • Corner overwrites: {corner_overwrites} corner conflict resolutions")
         
         # Debug: Print frame-wise temporal consistency chain summary
         if debug_mode:
@@ -2254,7 +2394,7 @@ class TiledWanVideoVACEpipe:
         tiles = []
         
         if total_frames <= target_frames:
-            tiles.append((0, total_frames))
+            tiles.appd((0, total_frames))
         else:
             stride = target_frames - overlap
             current = 0
