@@ -1448,10 +1448,12 @@ class TiledWanVideoVACEpipe:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("processed_video", "processing_info")
+    RETURN_TYPES = ("IMAGE", "STRING", "IMAGE", "IMAGE")
+    RETURN_NAMES = ("processed_video", "processing_info", "first_temporal_chunk", "second_temporal_chunk")
     OUTPUT_TOOLTIPS = ("Processed video with WanVideo VACE pipeline applied through tiled processing. Maintains original dimensions and quality.", 
-                      "Detailed information about the processing including tile counts, timing, and processing summary.")
+                      "Detailed information about the processing including tile counts, timing, and processing summary.",
+                      "First temporal chunk for debugging - shows the stitched content of the first temporal chunk",
+                      "Second temporal chunk for debugging - shows the stitched content of the second temporal chunk (or first chunk if only one exists)")
     FUNCTION = "process_tiled_wanvideo"
     OUTPUT_NODE = True
     CATEGORY = "TiledWan"
@@ -1562,6 +1564,16 @@ class TiledWanVideoVACEpipe:
             print(f"\n🔄 STEP 5: Temporal stitching...")
             stitched_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
             
+            # STEP 5.5: Extract debug temporal chunks
+            print(f"\n🔍 STEP 5.5: Extracting temporal chunks for debugging...")
+            first_chunk = temporal_chunks[0]['content'] if len(temporal_chunks) > 0 else video
+            second_chunk = temporal_chunks[1]['content'] if len(temporal_chunks) > 1 else first_chunk
+            
+            print(f"🔍 Debug chunks extracted:")
+            print(f"   • First chunk shape: {first_chunk.shape}")
+            print(f"   • Second chunk shape: {second_chunk.shape}")
+            print(f"   • Total temporal chunks: {len(temporal_chunks)}")
+            
             # STEP 6: Crop to original dimensions (ensure exact input size)
             print(f"\n✂️ STEP 6: Cropping to original dimensions...")
             print(f"📐 Stitched video shape: {stitched_video.shape}")
@@ -1581,7 +1593,7 @@ class TiledWanVideoVACEpipe:
             print(f"✅ Successful tiles: {successful_tiles}/{total_tiles}")
             print("="*80 + "\n")
             
-            return (final_video, processing_summary)
+            return (final_video, processing_summary, first_chunk, second_chunk)
             
         except Exception as e:
             print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
@@ -1592,7 +1604,7 @@ class TiledWanVideoVACEpipe:
             
             # Return original video in case of error
             error_info = f"Error during tiled WanVideo processing: {str(e)}"
-            return (video, error_info)
+            return (video, error_info, video, video)
     
     
     def _extract_and_process_wanvideo_tiles(self, video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
