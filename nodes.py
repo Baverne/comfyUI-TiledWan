@@ -2394,7 +2394,7 @@ class TiledWanVideoVACEpipe:
         tiles = []
         
         if total_frames <= target_frames:
-            tiles.appd((0, total_frames))
+            tiles.append((0, total_frames))
         else:
             stride = target_frames - overlap
             current = 0
