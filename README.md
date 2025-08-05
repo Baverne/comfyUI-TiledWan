@@ -17,4 +17,4 @@ git clone https://github/Baverne/comfyUI-TiledWan comfyUI-TiledWan
 
 The workflow was inspired by [Mickmumpitz's](https://www.patreon.com/posts/shoot-entire-ai-127894905?utm_medium=clipboard_copy&utm_source=copyLink&utm_campaign=postshare_creator&utm_content=join_link).
 
-The node set inlcudes two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes. Since my modification significantly modified the order in which the node performed its processing and that I coudn't guarantee that it would always work just as well, I decided not to merge request (which would have been a better practice, sorry)
+The node set inlcudes two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes. Since my modifications significantly modified the order in which the node performed its processing and that I coudn't guarantee that it would always work just as well, I decided not to merge request (which would have been a better practice, sorry)
