@@ -2210,11 +2210,7 @@ class TiledWanVideoVACEpipe:
             else:
                 # Subsequent tiles - use full available overlap for blending
                 expected_start = tile.spatial_range_h[0]
-                actual_overlap = current_h - expected_start
-                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
-                
-                # Use full overlap for better blending quality
-                overlap_h = min(actual_overlap, tile_h // 2, current_h)
+                overlap_h  = current_h - expected_start
                 
                 if overlap_h > 0:
                     # Get regions for blending (using full overlap)
@@ -2274,11 +2270,7 @@ class TiledWanVideoVACEpipe:
             else:
                 # Subsequent strips - use full available overlap for blending
                 expected_start = strip['spatial_range_w'][0]
-                actual_overlap = current_w - expected_start
-                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
-                
-                # Use full overlap for better blending quality
-                overlap_w = min(actual_overlap, strip_w // 2, current_w)
+                overlap_w = current_w - expected_start
                 
                 if overlap_w > 0:
                     # Get regions for blending (using full overlap)
