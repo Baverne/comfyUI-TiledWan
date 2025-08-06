@@ -1681,9 +1681,11 @@ class TiledWanVideoVACEpipe:
                         # Determine how many frames to overwrite
                         frames_to_overwrite = frame_overlap
                         if temporal_idx == len(temporal_tiles) - 1:
-                            # Last chunk: use more frames if chunk is large enough
-                            available_frames = video_tile.shape[0]
-                            frames_to_overwrite = min(available_frames - 1, max(frame_overlap, available_frames // 3))
+                            # Last chunk:
+                            # Look at previous chunk end frame
+                            previous_chunk_end_frame_index = temporal_tiles[temporal_idx - 1][1] - 1
+                            # Use as many frame as actual overlap allows. 
+                            frames_to_overwrite = previous_chunk_end_frame_index - t_start + 1
                         
                         # Extract corresponding frames from previous chunk's stitched result
                         prev_chunk_frames = previous_chunk_stitched_frame.shape[0]
@@ -1691,15 +1693,14 @@ class TiledWanVideoVACEpipe:
                         source_frames = previous_chunk_stitched_frame[source_start_idx:, h_start:h_end, w_start:w_end, :].clone()  # HARD COPY
                         
                         # Overwrite first frames of current tile with last frames from previous chunk
-                        actual_overwrite = min(frames_to_overwrite, source_frames.shape[0], video_tile.shape[0])
-                        if actual_overwrite > 0:
-                            video_tile[:actual_overwrite] = source_frames[:actual_overwrite]
+                        if frames_to_overwrite > 0:
+                            video_tile[:frames_to_overwrite] = source_frames
                             # Zero out corresponding mask areas
-                            mask_tile[:actual_overwrite] = 0.0
+                            mask_tile[:frames_to_overwrite] = 0.0
                             
                             if debug_mode:
-                                print(f"         🔄 Temporal overwrite: {actual_overwrite} frames from prev chunk")
-                    
+                                print(f"         🔄 Temporal overwrite: {frames_to_overwrite} frames from prev chunk")
+
                     # ========== SPATIAL OVERWRITING FOR CONSISTENCY ==========
                     # Look for already processed tiles to overwrite overlapping regions
                     
