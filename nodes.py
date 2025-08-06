@@ -1448,36 +1448,43 @@ class TiledWanVideoVACEpipe:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("processed_video", "processing_info", "first_temporal_chunk", "second_temporal_chunk")
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("processed_video", "processing_info")
     OUTPUT_TOOLTIPS = ("Processed video with WanVideo VACE pipeline applied through tiled processing. Maintains original dimensions and quality.", 
-                      "Detailed information about the processing including tile counts, timing, and processing summary.",
-                      "First temporal chunk for debugging - shows the stitched content of the first temporal chunk",
-                      "Second temporal chunk for debugging - shows the stitched content of the second temporal chunk (or first chunk if only one exists)")
+                      "Detailed information about the processing including tile counts, timing, and processing summary.")
     FUNCTION = "process_tiled_wanvideo"
     OUTPUT_NODE = True
     CATEGORY = "TiledWan"
     DESCRIPTION = """
-    Video processing node that tiles WanVideo VACE pipeline.
+    Advanced video processing node that applies WanVideo VACE pipeline to large videos through intelligent tiling.
     
-    Enables processing of arbitrarily large videos that would otherwise exceed model limits.
-    Uses dimension-wise tiling with temporal and spatial overlap to maintain
-    quality and eliminate artifacts. The complete WanVideo VACE pipeline is applied to each
-    tile with proper stitching and blending for seamless results.
-    Give last chunk frame as reference for the upcoming generation in order to maintain consistency across temporal chunks
+    Enables processing of arbitrarily large videos that would otherwise exceed memory limits.
+    Uses dimension-wise tiling with temporal and spatial overlap to maintain quality and consistency.
+    The complete WanVideo VACE pipeline is applied to each tile with sophisticated overwriting strategies
+    for seamless results.
+
+    Processing Algorithm:
+    1. Temporal tiling: Split video into chunks with overlap (default: 81 frames, 10-frame overlap)
+    2. Spatial tiling: Split each chunk into tiles with overlap (default: 832×480, 20-pixel overlap)  
+    3. Temporal consistency: Previous chunks provide reference frames for upcoming chunks
+    4. Spatial consistency: Already-processed neighboring tiles overwrite overlapping regions
+    5. WanVideo VACE processing: Each tile processed through complete pipeline
+    6. Dimension-wise stitching: Column-wise → Line-wise → Temporal stitching
+    7. Final cropping: Output matches exact input dimensions
 
     Key Features:
-    - Handles any video size through tiling
-    - Temporal consistency across chunks thanks to cross-chunk reference
-    - Spatial seamless stitching with fade blending
-    - Memory-efficient processing with model offloading
+    - Handles any video size through intelligent tiling
+    - Temporal consistency across chunks via frame reference chaining
+    - Spatial consistency through neighbor tile overwriting
+    - Memory-efficient with model offloading between tiles
     - Complete WanVideo VACE pipeline integration
-    - Debug modes for monitoring and troubleshooting
+    - Sophisticated fade blending for seamless stitching
+    - Tensor safety with hard copies to prevent data contamination
     
-    Overlap Behavior:
-    - Overlap blending uses full available overlap regions for best quality
-    - Smooth fade transitions across all dimensions (temporal, spatial)
-    - Overlapping regions are blended rather than hard-cropped
+    Consistency Mechanisms:
+    - Temporal: Last frames from previous chunks overwrite first frames of current chunks
+    - Spatial: Left/top neighbors overwrite overlapping edges in current tiles
+    - All overwritten regions have masks zeroed for proper processing
     """
 
     def process_tiled_wanvideo(self, video, mask, model, vae, target_frames, target_width, target_height, 
@@ -1564,16 +1571,6 @@ class TiledWanVideoVACEpipe:
             print(f"\n🔄 STEP 5: Temporal stitching...")
             stitched_video = self._stitch_temporal_chunks_new(temporal_chunks, temporal_tiles, frame_overlap)
             
-            # STEP 5.5: Extract debug temporal chunks
-            print(f"\n🔍 STEP 5.5: Extracting temporal chunks for debugging...")
-            first_chunk = temporal_chunks[0]['content'] if len(temporal_chunks) > 0 else video
-            second_chunk = temporal_chunks[1]['content'] if len(temporal_chunks) > 1 else first_chunk
-            
-            print(f"🔍 Debug chunks extracted:")
-            print(f"   • First chunk shape: {first_chunk.shape}")
-            print(f"   • Second chunk shape: {second_chunk.shape}")
-            print(f"   • Total temporal chunks: {len(temporal_chunks)}")
-            
             # STEP 6: Crop to original dimensions (ensure exact input size)
             print(f"\n✂️ STEP 6: Cropping to original dimensions...")
             print(f"📐 Stitched video shape: {stitched_video.shape}")
@@ -1603,7 +1600,7 @@ class TiledWanVideoVACEpipe:
             except:
                 pass
             
-            return (final_video, processing_summary, first_chunk, second_chunk)
+            return (final_video, processing_summary)
             
         except Exception as e:
             print(f"❌ Error in tiled WanVideo VACE pipeline: {str(e)}")
@@ -1635,7 +1632,7 @@ class TiledWanVideoVACEpipe:
             except:
                 pass
             
-            return (video, error_info, video, video)
+            return (video, error_info)
     
     
     def _extract_and_process_wanvideo_tiles(self, video, mask, temporal_tiles, spatial_tiles_h, spatial_tiles_w,
