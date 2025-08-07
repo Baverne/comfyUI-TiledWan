@@ -934,11 +934,7 @@ class TiledWanVideoVACEpipe:
                 # Subsequent chunks - use full available overlap for blending
                 temporal_tile_info = temporal_tiles[i]
                 expected_start = temporal_tile_info[0]
-                actual_overlap = current_t - expected_start
-                actual_overlap = max(0, actual_overlap)  # Ensure non-negative
-                
-                # Use full overlap for better blending quality
-                overlap_frames = min(actual_overlap, chunk_frames // 2, current_t)
+                overlap_frames = current_t - expected_start
                 
                 if overlap_frames > 0:
                     # Get regions for blending (using full overlap)
@@ -1275,35 +1271,31 @@ class TiledWanVideoVACEpipe:
         # Create base mask (1.0 = use new tile, 0.0 = use existing)
         mask = torch.ones(1, tile_h, tile_w, 1, dtype=existing.dtype, device=existing.device)
         
-        # Define fade distance using spatial_overlap parameter
-        fade_h = min(spatial_overlap, tile_h // 2)  # Fade over spatial_overlap pixels or half tile height
-        fade_w = min(spatial_overlap, tile_w // 2)  # Fade over spatial_overlap pixels or half tile width
-        
         # Check which edges have existing content
-        has_top = existing[:, :fade_h, :, :].sum() > 0
-        has_bottom = existing[:, -fade_h:, :, :].sum() > 0
-        has_left = existing[:, :, :fade_w, :].sum() > 0
-        has_right = existing[:, :, -fade_w:, :].sum() > 0
+        has_top = existing[:, :spatial_overlap, :, :].sum() > 0
+        has_bottom = existing[:, -spatial_overlap:, :, :].sum() > 0
+        has_left = existing[:, :, :spatial_overlap, :].sum() > 0
+        has_right = existing[:, :, -spatial_overlap:, :].sum() > 0
         
         # Create fade gradients for each edge
         if has_top:
-            for i in range(fade_h):
-                alpha = i / fade_h
+            for i in range(spatial_overlap):
+                alpha = i / spatial_overlap
                 mask[:, i, :, :] = alpha
         
         if has_bottom:
-            for i in range(fade_h):
-                alpha = 1.0 - (i / fade_h)
+            for i in range(spatial_overlap):
+                alpha = 1.0 - (i / spatial_overlap)
                 mask[:, tile_h - 1 - i, :, :] = alpha
         
         if has_left:
-            for i in range(fade_w):
-                alpha = i / fade_w
+            for i in range(spatial_overlap):
+                alpha = i / spatial_overlap
                 mask[:, :, i, :] = torch.minimum(mask[:, :, i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
         
         if has_right:
-            for i in range(fade_w):
-                alpha = 1.0 - (i / fade_w)
+            for i in range(spatial_overlap):
+                alpha = 1.0 - (i / spatial_overlap)
                 mask[:, :, tile_w - 1 - i, :] = torch.minimum(mask[:, :, tile_w - 1 - i, :], torch.tensor(alpha, dtype=mask.dtype, device=mask.device))
         
         return mask.expand_as(new_tile)
