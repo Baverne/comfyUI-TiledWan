@@ -1,6 +1,6 @@
 # 🧩 TiledWan ComfyUI Node Set
 
-Wan2.1 Vace can perform video inpainting on 832x432 81-frame videos. This custom node set and node adapts it to process as long and as large videos as one wants with tiling while maintaining consistency.
+Wan2.1 Vace can perform video inpainting on 832x480 81-frame videos. This custom node set and node adapts it to process as long and as large videos as one wants with tiling while maintaining consistency.
 One can find a workflow example in the folder "workflow". The workflow is rather comprehensively commented and contains important tips and tricks.
 
 Provide a video, a mask, a prompt and a ref image. The workflow computes itself how it should tile and process the video and it stitches everything back before saving the final output.
