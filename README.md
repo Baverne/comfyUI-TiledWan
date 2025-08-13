@@ -20,6 +20,8 @@ The workflow has been though to provide an output to be recompositited. It can p
     </tr>
 </table>
 
+<video src="Medias/BEFORE.mp4" controls width="320"></video>
+
 ## Custom Nodes
 
 ### TiledWan Video VACE pipe
