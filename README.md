@@ -5,7 +5,7 @@ One can find a workflow example in the folder "workflow". The workflow is rather
 
 Provide a video, a mask, a prompt and a ref image. The workflow computes itself how it should tile and process the video and it stitches everything back before saving the final output.
 
-The workflow has been thought to provide an output to be recomposited. It can provide a good workbase for VFX-artists but is far from satisfying out of the box for most standards.
+Workflow output is meant to be recomposited. It can provide a good workbase for VFX-artists but is far from satisfying out of the box for most standards.
 
 <table>
 <tr>
