@@ -3,7 +3,22 @@
 Some key custom nodes and node adaptations to perform efficient tiled Wan2.1 Inpainting in Comfy-UI.
 One can find a workflow example in the folder "worklow". The workflow is rather comprehensively commented and contains important tips and tricks. I suggest to read it all before using.
 
-The workflow has been though to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards. 
+The workflow has been though to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
+
+<table>
+    <tr>
+        <th>Before</th>
+        <th>After</th>
+    </tr>
+    <tr>
+        <td>
+            <video src="Medias/BEFORE.mp4" controls width="320"></video>
+        </td>
+        <td>
+            <video src="Medias/AFTER.mp4" controls width="320"></video>
+        </td>
+    </tr>
+</table>
 
 ## Custom Nodes
 
