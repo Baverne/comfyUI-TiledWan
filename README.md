@@ -9,17 +9,27 @@ Workflow output is meant to be recomposited. It can provide a good workbase for 
 
 ## 🎬 Example
 
-<video width="100%" controls>
-    <source src="Medias/Input_Output_Comparaison.mp4" type="video/mp4">
-    Your browser does not support the video tag.
-</video>
+https://www.github.com/Baverne/comfyUI-TiledWan/Medias/Input_Output_Comparaison.mp4
+
 
 *Process example on one spatial tile and 4 temporal tiles stitched together.*
 
-I provided the inputs files in /Medias along with the worklow for testing. 
+I provided the inputs files in /Medias for testing. 
 Example taken from [Galoi's Will](https://youtu.be/_DAqWS7MyEw).
 
+## ⚙️ Installation
 
+1. Clone this repository into your ComfyUI `custom_nodes` directory:
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github/Baverne/comfyUI-TiledWan comfyUI-TiledWan
+```
+
+2. Restart ComfyUI
+
+OR
+
+I recently pull request to the comfyUI manager so it should work well with it aswell.
 
 ## 🛠️ Custom Nodes
 
@@ -37,15 +47,7 @@ They have been modified to ignore size variation (leads to inconsistencies) and 
 
 Modified [comfy_extras](https://github.com/comfyanonymous/ComfyUI) node which converts image into mask and allows to perform mask normalization and clamping.
 
-## ⚙️ Installation
 
-1. Clone this repository into your ComfyUI `custom_nodes` directory:
-```bash
-cd ComfyUI/custom_nodes
-git clone https://github/Baverne/comfyUI-TiledWan comfyUI-TiledWan
-```
-
-2. Restart ComfyUI
 
 ## 🚧 Limitations
 
