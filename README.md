@@ -1,9 +1,9 @@
 # TiledWan ComfyUI Node Set
 
-Some key custom nodes and node adaptations to perform efficient tiled Wan2.1 Inpainting in Comfy-UI.
-One can find a workflow example in the folder "worklow". The workflow is rather comprehensively commented and contains important tips and tricks. I suggest to read it all before using.
+Wan2.1 Vace can perfom video inpainting on 832x432 81 frames videos. This custom node set and node adapts it to process as long and as large videos as one wants with tiling while maintaining consistency.
+One can find a workflow example in the folder "worklow". The workflow is rather comprehensively commented and contains important tips and tricks.
 
-The workflow has been though to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
+The workflow has been thought to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
 
 <table>
     <tr>
