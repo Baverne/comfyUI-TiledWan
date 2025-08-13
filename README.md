@@ -21,15 +21,14 @@ Example taken from [Galoi's Will](https://youtu.be/_DAqWS7MyEw).
 
 1. Clone this repository into your ComfyUI `custom_nodes` directory:
 ```bash
-cd ComfyUI/custom_nodes
-git clone https://github/Baverne/comfyUI-TiledWan comfyUI-TiledWan
+git clone https://github/Baverne/comfyUI-TiledWan
 ```
 
 2. Restart ComfyUI
 
 OR
 
-I recently pull request to the comfyUI manager so it should work well with it aswell.
+Install it from the [Manager](https://github.com/Comfy-Org/ComfyUI-Manager)
 
 ## 🛠️ Custom Nodes
 
