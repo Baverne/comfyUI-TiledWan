@@ -27,7 +27,7 @@ Workflow output is meant to be recomposited. It can provide a good workbase for 
 </td>
 <td align="center">
 
-[![Mask Video](https://img.youtube.com/vi/5u_P9btPidA/maxresdefault.jpg)](https://www.youtube.com/watch?v=5u_P9btPidA)
+[![Mask Video](https://img.youtube.com/vi/5u_P9btPidA/maxresdefault.jpg)](https://www.youtube.com/watch?v=8Al7O1usHTw)
 **Rough Mask**
 
 </td>
