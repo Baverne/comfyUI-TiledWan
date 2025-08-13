@@ -5,22 +5,29 @@ One can find a workflow example in the folder "worklow". The workflow is rather 
 
 The workflow has been thought to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
 
+
 <table>
-    <tr>
-        <th>Before</th>
-        <th>After</th>
-    </tr>
-    <tr>
-        <td>
-            <video src="Medias/BEFORE.mp4" controls width="320"></video>
-        </td>
-        <td>
-            <video src="Medias/AFTER.mp4" controls width="320"></video>
-        </td>
-    </tr>
+<tr>
+<th>Before (Input)</th>
+<th>After (Processed)</th>
+</tr>
+<tr>
+<td>
+
+![Before Video](Medias/BEFORE.mp4)
+
+</td>
+<td>
+
+![After Video](Medias/AFTER.mp4)
+
+</td>
+</tr>
 </table>
 
-<video src="Medias/BEFORE.mp4" controls width="320"></video>
+*Process example on one spatial tile and 4 temporal tiles stiched together.*
+
+
 
 ## Custom Nodes
 
