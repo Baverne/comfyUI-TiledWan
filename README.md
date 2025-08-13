@@ -9,7 +9,7 @@ Workflow output is meant to be recomposited. It can provide a good workbase for 
 
 ## 🎬 Example
 
-https://www.github.com/Baverne/comfyUI-TiledWan/Medias/Input_Output_Comparaison.mp4
+https://github.com/Baverne/comfyUI-TiledWan/blob/main/Medias/Input_Output_Comparaison.mp4
 
 
 *Process example on one spatial tile and 4 temporal tiles stitched together.*
