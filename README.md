@@ -5,11 +5,28 @@ One can find a workflow example in the folder "worklow". The workflow is rather 
 
 The workflow has been thought to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/f03oRehvUxA?si=GV-SJ_yB0OaHrv5D" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+## Results
 
+### Before and After Comparison
 
-[![After Video](https://img.youtube.com/vi/YOUR_AFTER_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=f03oRehvUxA)
+<table>
+<tr>
+<th>Before (Input)</th>
+<th>After (Processed)</th>
+</tr>
+<tr>
+<td>
 
+[![Before Video](https://img.youtube.com/vi/tLfbdyswU-I/maxresdefault.jpg)](https://www.youtube.com/watch?v=tLfbdyswU-I)
+
+</td>
+<td>
+
+[![After Video](https://img.youtube.com/vi/f03oRehvUxA/maxresdefault.jpg)](https://www.youtube.com/watch?v=f03oRehvUxA)
+
+</td>
+</tr>
+</table>
 
 *Process example on one spatial tile and 4 temporal tiles stiched together.*
 
