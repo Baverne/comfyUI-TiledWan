@@ -1,18 +1,16 @@
 # TiledWan ComfyUI Node Set
 
-Wan2.1 Vace can perfom video inpainting on 832x432 81 frames videos. This custom node set and node adapts it to process as long and as large videos as one wants with tiling while maintaining consistency.
-One can find a workflow example in the folder "worklow". The workflow is rather comprehensively commented and contains important tips and tricks.
+Wan2.1 Vace can perform video inpainting on 832x432 81-frame videos. This custom node set and node adapts it to process as long and as large videos as one wants with tiling while maintaining consistency.
+One can find a workflow example in the folder "workflow". The workflow is rather comprehensively commented and contains important tips and tricks.
 
-The workflow has been thought to provide an output to be recompositited. It can provide a good workbase for VFX-artists but are far from satisfaying out of the box for most standards.
+Provide a video, a mask, a prompt and a ref image. The workflow computes itself how it should tile and process the video and it stitches everything back before saving the final output.
 
-## Results
-
-### Before and After Comparison
+The workflow has been thought to provide an output to be recomposited. It can provide a good workbase for VFX-artists but is far from satisfying out of the box for most standards.
 
 <table>
 <tr>
-<th>Before (Input)</th>
-<th>After (Processed)</th>
+<th>VIDEO INPUT</th>
+<th>VIDEO OUTPUT</th>
 </tr>
 <tr>
 <td>
@@ -28,9 +26,9 @@ The workflow has been thought to provide an output to be recompositited. It can 
 </tr>
 </table>
 
-*Process example on one spatial tile and 4 temporal tiles stiched together.*
+*Process example on one spatial tile and 4 temporal tiles stitched together.*
 
-Exemple taken from [Galoi's Will](https://youtu.be/_DAqWS7MyEw).
+Example taken from [Galoi's Will](https://youtu.be/_DAqWS7MyEw).
 
 
 
@@ -39,16 +37,16 @@ Exemple taken from [Galoi's Will](https://youtu.be/_DAqWS7MyEw).
 ### TiledWan Video VACE pipe
 
 TiledWan Video VACE pipe is designed to run Wan2.1 VACE using tiled processing. It handles large and long videos by splitting them into manageable tiles, processing each tile, and then seamlessly stitching them back together.
-Temporal and spatial consistencies are ensure by a overwrtting overlaping areas and reference inheritance.
+Temporal and spatial consistencies are ensured by overwriting overlapping areas and reference inheritance.
 
-### Inpaint Crop & Stich
+### Inpaint Crop & Stitch
 
-Two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes that crop arround the provided mask area to help the model focus on what matters.
-They have been modified to ignore size variation (leads to inconsistencies) and to handle mask apparition and disparitions.
+Two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes that crop around the provided mask area to help the model focus on what matters.
+They have been modified to ignore size variation (leads to inconsistencies) and to handle mask apparition and disappearance.
 
 ### Image to Mask
 
-Modified [comfy_extras](https://github.com/comfyanonymous/ComfyUI) node which convert image into mask and allow to perfom mask normalisation and clamping.
+Modified [comfy_extras](https://github.com/comfyanonymous/ComfyUI) node which converts image into mask and allows to perform mask normalization and clamping.
 
 ## Installation
 
@@ -62,15 +60,15 @@ git clone https://github/Baverne/comfyUI-TiledWan comfyUI-TiledWan
 
 ## Limitations
 
-Even if one can achieve rather good consistency with this workflow, the Wan2.1 vace model do suffer from poor definiton and "cartoonish" outputs sometimes.
+Even if one can achieve rather good consistency with this workflow, the Wan2.1 vace model does suffer from poor definition and "cartoonish" outputs sometimes.
 Increasing spatial tiles number can help sometimes but might lead to model cluelessness over proper context. Indeed Wan2.1 is meant to be provided meaningful frames.
 
 
-## Aknowledgemeents
+## Acknowledgements
 
 The workflow was inspired by [Mickmumpitz's](https://www.patreon.com/posts/shoot-entire-ai-127894905?utm_medium=clipboard_copy&utm_source=copyLink&utm_campaign=postshare_creator&utm_content=join_link).
 
-The node set inlcudes two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes and one from [comfy_extras](https://github.com/comfyanonymous/ComfyUI) all of them licensed under GNU GENERAL PUBLIC LICENSE Version 3. 
+The node set includes two modified [lquesada's](https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch) nodes and one from [comfy_extras](https://github.com/comfyanonymous/ComfyUI), all of them licensed under GNU GENERAL PUBLIC LICENSE Version 3. 
 
 # License
 GNU GENERAL PUBLIC LICENSE Version 3, see [LICENSE](LICENSE)
