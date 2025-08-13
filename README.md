@@ -9,18 +9,38 @@ Workflow output is meant to be recomposited. It can provide a good workbase for 
 
 <table>
 <tr>
-<th>VIDEO INPUT</th>
-<th>VIDEO OUTPUT</th>
+<th colspan="3">INPUTS</th>
+<th>OUTPUT</th>
 </tr>
 <tr>
-<td>
+<th>Video</th>
+<th>Mask</th>
+<th>Reference Image</th>
+<th>Result</th>
+</tr>
+<tr>
+<td align="center">
 
 [![Before Video](https://img.youtube.com/vi/tLfbdyswU-I/maxresdefault.jpg)](https://www.youtube.com/watch?v=tLfbdyswU-I)
+**Original Video**
 
 </td>
-<td>
+<td align="center">
+
+[![Mask Video](https://img.youtube.com/vi/5u_P9btPidA/maxresdefault.jpg)](https://www.youtube.com/watch?v=5u_P9btPidA)
+**Mask Animation**
+
+</td>
+<td align="center">
+
+![Reference Image](Medias/REF.png)
+**Reference Image**
+
+</td>
+<td align="center">
 
 [![After Video](https://img.youtube.com/vi/f03oRehvUxA/maxresdefault.jpg)](https://www.youtube.com/watch?v=f03oRehvUxA)
+**Final Output**
 
 </td>
 </tr>
