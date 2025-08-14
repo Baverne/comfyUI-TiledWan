@@ -755,8 +755,7 @@ class TiledWanVideoVACEpipe:
     def _stitch_tiles_vertically(self, column_tiles, spatial_overlap):
         """
         Stitch tiles vertically (in height dimension) with proper fade blending.
-        Always respects spatial_overlap limit - starts blending from the correct position
-        within the overlapping region when actual overlap exceeds spatial_overlap.
+        Always respects spatial_overlap limit
         """
         if len(column_tiles) == 1:
             return column_tiles[0].content

@@ -53,6 +53,8 @@ Modified [comfy_extras](https://github.com/comfyanonymous/ComfyUI) node which co
 Even if one can achieve rather good consistency with this workflow, the Wan2.1 vace model does suffer from poor definition and "cartoonish" outputs sometimes.
 Increasing spatial tiles number can help but might lead to model cluelessness over proper context. Indeed Wan2.1 is meant to be provided meaningful frames.
 
+A noticeable color shift may occur, even on unmasked areas. This shift should be taken into account during compositing. Additionally, it can introduce inconsistencies between tiles: tiles that are partially overwritten with shifted colors may amplify the effect in subsequent generations.
+
 
 ## 🙏 Acknowledgements
 
