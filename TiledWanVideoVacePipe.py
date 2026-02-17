@@ -208,9 +208,12 @@ class TiledWanVideoVACEpipe:
                 sys.path.insert(0, parent_path)
             
             package_name = os.path.basename(custom_nodes_path)
+            # WanVideoSampler is in nodes_sampler.py
+            wanvideo_sampler_package = importlib.import_module(f"{package_name}.nodes_sampler")
+            # WanVideoVACEEncode and WanVideoDecode are in nodes.py
             wanvideo_package = importlib.import_module(f"{package_name}.nodes")
             
-            WanVideoSampler = wanvideo_package.WanVideoSampler
+            WanVideoSampler = wanvideo_sampler_package.WanVideoSampler
             WanVideoVACEEncode = wanvideo_package.WanVideoVACEEncode
             WanVideoDecode = wanvideo_package.WanVideoDecode
             print("✅ WanVideo nodes imported successfully!")
